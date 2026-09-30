@@ -1,0 +1,30 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Local secrets (e.g. the Bluesky app password). Only the template is versioned.
+.env
+.env.*
+!.env.example
+
+# Model weights are fetched during `make build` and baked into the image;
+# they are never committed.
+*.gguf
+
+# Packaged artefacts (submission zip, packaged Helm charts)
+*.zip
+*.tgz
+
+# Editors / OS
+.DS_Store
+.idea/
+
+# Claude Code per-user settings (CLAUDE.md itself is versioned on purpose)
+.claude/settings.local.json

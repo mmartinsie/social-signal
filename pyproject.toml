@@ -1,0 +1,5 @@
+# Virtual workspace root: it has no [project] table of its own and only groups
+# the members below under a single uv.lock, so every service resolves the same
+# dependency versions. Each member is built into its own image.
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]

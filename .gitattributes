@@ -1,0 +1,11 @@
+# Normalise every text file to LF, both in the repository and in the working
+# tree, so the Makefile and shell scripts behave the same on Linux, macOS and
+# WSL regardless of the user's core.autocrlf setting.
+* text=auto eol=lf
+
+# Binary artefacts: never convert line endings or produce text diffs.
+*.gguf binary
+*.png  binary
+*.jpg  binary
+*.zip  binary
+*.tgz  binary

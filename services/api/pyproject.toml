@@ -1,0 +1,13 @@
+[project]
+name = "socialsignal-api"
+version = "0.1.0"
+description = "HTTP API and minimal UI to manage subscriptions and read sentiment summaries."
+requires-python = ">=3.12"
+dependencies = ["socialsignal-common"]
+
+[tool.uv.sources]
+socialsignal-common = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13.0"]
+build-backend = "uv_build"
