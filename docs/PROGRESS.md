@@ -1,28 +1,27 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 6a)._
+_Last updated: 2026-09-30 (step 6b)._
 
 ## Current step
 
-**Step 6a: hashtag ingestor code (hybrid credentials, A6 and D20).** Done:
-- 53 unit tests pass;
-- real searches work both without authentication (`api.bsky.app`) and
-  with the author's app password (login at `bsky.social`, search through
-  the PDS).
+**Step 6b: credentials Secret and hashtag CronJob (D21).** Done:
+- `make start` turns `.env` into `ingest/bluesky-credentials`;
+- `ingestor-hashtags` runs every 20 minutes, and `ingestor-handles` every 5;
+- tested end to end with credentials, without them, and against Bluesky's
+  real search block;
+- the password leaks nowhere;
+- `verify-boundary` passes 27/27.
 
-The author's `.env` exists locally (git-ignored, mode 600).
+**State of the cluster:**
+- The demo subscriptions `handle bsky.app` and `hashtag python` stay, so
+  the worker (step 8) has posts to classify: 92 posts at the end of step 6b
+  (42 and 50).
+- With the author's `.env`, `ingestor-hashtags` logs in to Bluesky every
+  20 minutes while the cluster runs (72 of the account's 300 daily logins).
+  `make stop` stops it.
 
-The cluster keeps the demo subscription `handle bsky.app`, so the worker
-(step 8) has posts to classify. It still runs the step 5b image; the new
-`handles` subcommand reaches it in step 6b.
-
-Next: **step 6b**:
-- `make start` turns `.env` into the Secret `ingest/bluesky-credentials`;
-- the `ingestor-hashtags` CronJob (schedule to decide: 15 minutes proposed,
-  because of the 300 logins per day);
-- `make build` and `make start`;
-- end to end with and without credentials;
-- `verify-boundary`.
+Next: **step 7**: the offline LLM server (llama.cpp with Gemma 4 E2B, A1)
+and a classification smoke test.
 
 ## Steps
 
@@ -40,7 +39,7 @@ Next: **step 6b**:
 | 5a | Handle ingestor code, unit tests, real call to Bluesky | Done (2026-09-30) |
 | 5b | Ingestor image and CronJob, end to end into PostgreSQL | Done (2026-09-30) |
 | 6a | Hashtag ingestor code, unit tests, real calls to Bluesky | Done (2026-09-30) |
-| 6b | Credentials Secret and hashtag CronJob, end to end | Pending |
+| 6b | Credentials Secret and hashtag CronJob, end to end | Done (2026-09-30) |
 | 7 | Offline LLM server and classification smoke test | Pending |
 | 8 | Summary worker | Pending |
 | 9 | API and minimal UI | Pending |
@@ -57,9 +56,8 @@ Next: **step 6b**:
 - Steps 8 and 9: pods must carry `app.kubernetes.io/component`, and Services
   must also select `app.kubernetes.io/instance`, so that the
   `verify-boundary` test pods never receive traffic (D12).
-- Step 6b: the hashtag CronJob would be the third copy of the database
-  environment and the security contexts (migration Job, handle ingestor).
-  Move them into Helm helpers there (D19).
+- Steps 8 and 9: use the Helm helpers from step 6b for the database
+  environment and the security contexts (D21).
 - Step 7: `k3d image import` copies each image into all 3 nodes, and imports
   are slow on this HDD. Measure it with the multi-GB LLM image and consider
   importing it only where the LLM runs. Add the LLM checks to
@@ -93,4 +91,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
 | 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 | 5a-6a | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 | 5a-6b | *TBD* | Session 3 (WSL, new conversation) |

@@ -1006,9 +1006,8 @@ decisions, **E** = development environment, **R** = repository layout.
   - Freshness is bounded by the ingestor's schedule plus the worker's.
   - After `make start`, the first run happens at the next 5-minute mark. To
     run it now: `kubectl create job --from=cronjob/ingestor`.
-  - The database environment and the security contexts are now copied in
-    two templates. They should be factored into helpers when the worker and
-    the API add more copies.
+  - The database environment and the security contexts were copied in two
+    templates. *Moved into Helm helpers in step 6b (D21).*
 - **Verified:**
   - **Image:**
     - `socialsignal/ingestor`, a 50 MB tarball;
@@ -1119,6 +1118,79 @@ decisions, **E** = development environment, **R** = repository layout.
     - `#python` searched through that PDS with the Bearer token kept 50
       posts by 30 authors;
     - the script printed neither the password nor the token.
+
+### D21. Bluesky credentials Secret and the hashtag CronJob (step 6b)
+
+- **Decision:**
+  - **The Secret.** `make start` runs `scripts/bluesky-secret.sh`, which
+    turns the optional `.env` into the Secret `ingest/bluesky-credentials`,
+    with the keys `identifier` and `app-password`:
+
+    | Contents of `.env` | Result |
+    |---|---|
+    | No file, or both values empty | The Secret is deleted, if it exists |
+    | Only one of the two values | Error |
+    | Both values | The Secret is created, or replaced if they changed. Unchanged values keep it as is |
+
+  - **Parsing:** plain `KEY=value` lines. A trailing carriage return (a file
+    saved on Windows) and one pair of surrounding quotes are removed.
+  - **How the values travel:**
+    - only through shell variables, pipes and stdin, never through a
+      command's arguments (as in D13);
+    - base64 in `data`, so no character can break the YAML;
+    - `kubectl create`, never `kubectl apply`. Tested: `apply` copies a
+      Secret's `stringData` in clear text into the
+      `last-applied-configuration` annotation.
+  - **Two CronJobs from one template:**
+    - `ingestor-handles`, every 5 minutes;
+    - `ingestor-hashtags`, **every 20 minutes** (the author's choice): 72
+      logins a day, which leaves over 200 of Bluesky's 300 for manual runs.
+
+    Only `ingestor-hashtags` mounts the Secret, with `optional: true`:
+    without it the directory is empty and the search runs unauthenticated.
+    The old `ingestor` CronJob was renamed to `ingestor-handles`.
+  - **Helm helpers:** the database environment, the credentials volume and
+    the security contexts are now shared by the migration Job and both
+    CronJobs. The only change in the rendered migration Job is that its
+    volume is now named `db-credentials`.
+- **Alternatives:**
+  - `kubectl create secret generic --from-env-file=.env`. It would store
+    every key of the file, with its original names, and it does not remove
+    quotes.
+  - `kubectl apply` with `stringData`. It is idempotent, but copies the
+    password in clear text into an annotation.
+  - Helm reading `.env`. The password would be stored in the release,
+    which D13 rules out for the database passwords too.
+  - A schedule of 10 or 15 minutes (144 or 96 logins a day).
+- **Why:** the credentials exist only in the zone that needs them, and only
+  in the pod that uses them. They are declared by one file the user
+  controls, and removing them is just as easy.
+- **Trade-off:**
+  - Hashtags are fresh to within 20 minutes, plus the worker's schedule.
+  - A changed password is picked up on the next `make start`, not
+    immediately.
+  - As with the database Secrets, the value is only base64-encoded in k3s'
+    datastore (encryption at rest is an open item).
+- **Verified:**
+  - **Script,** with a fake `kubectl` and fake files: CRLF and quoted
+    values, an empty file, a missing file, only one value (error), and no
+    final newline.
+  - **In the cluster:**
+    - the Secret exists only in `ingest`, has no annotations, is in no Helm
+      release, and a second run keeps it;
+    - only `ingestor-hashtags` mounts it.
+  - **End to end with `#python`:**
+    - with credentials, it logged in, searched through the author's PDS and
+      stored 50 new posts;
+    - without them (Secret deleted by the script), the pod started with an
+      empty directory, searched unauthenticated and found the same 50 posts
+      (0 new);
+    - against `public.api.bsky.app`, where Bluesky's block is active, the
+      warning came up and the Job ended `Complete` with exit status 0.
+  - **The handle CronJob** ran on schedule with the new image.
+  - **No leaks:** the app password appears in no CronJob spec, no ingestor
+    log and no Helm release.
+  - **Also:** `verify-boundary` 27/27, and 0 image pulls.
 
 ---
 
@@ -1243,6 +1315,8 @@ External facts the decisions above depend on.
 | `q=#python`, `q=python&tag=python` and `q=*&tag=python` all return posts carrying the `python` tag facet (100 of 100) | Real calls | 2026-09-30 |
 | On `@bsky.app`, keeping replies whose parent (and root) is the author reproduces `posts_and_author_threads` exactly: 67 of 67, 0 differences over the same time span | Real calls (D20) | 2026-09-30 |
 | `createSession` at `bsky.social` with an app password returns the DID document with the account's PDS; `searchPosts` sent to that PDS with the Bearer token works | Real call with the author's account (D20) | 2026-09-30 |
+| `kubectl apply` of a Secret copies its `stringData`, in clear text, into the `kubectl.kubernetes.io/last-applied-configuration` annotation | Local test with a fake value (D21) | 2026-09-30 |
+| A pod whose `optional: true` Secret volume refers to a missing Secret starts, with an empty directory at the mount path | Local test (D21) | 2026-09-30 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

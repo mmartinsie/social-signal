@@ -65,8 +65,9 @@ stores them in `posts`, linked to the subscription in `subscription_posts`.
   error fails the Job, which is then visible in `kubectl get jobs`.
 
 Hashtags use the same image with a different subcommand, as a separate
-CronJob (D20; deployed in step 6b). It searches the latest 50 posts with the
-tag and applies the same rule: no replies to other accounts.
+CronJob that runs every 20 minutes (D20, D21). It searches the latest 50
+posts with the tag and applies the same rule: no replies to other
+accounts.
 - With the optional credentials (A6), it logs in and searches through the
   account's PDS.
 - Without them, it searches Bluesky's AppView directly. That works only
@@ -151,6 +152,15 @@ enforced. *Checks against the LLM (step 7): TBD.*
   never by Helm, the repository or the bundle. Each zone only holds its own
   (`ingest` has only the ingestor's).
 - Every network client must authenticate with SCRAM-SHA-256.
+
+**Bluesky credentials (A6, D21).** The optional app password lives in a
+git-ignored `.env`, which never reaches an image. `make start` turns it
+into a Secret that exists only in `ingest`.
+- It is created with `kubectl create`, not `apply`, which would copy it in
+  clear text into an annotation.
+- Only the hashtag ingestor mounts it, as files. The handle ingestor never
+  sees it, and neither does the analysis zone.
+- It appears in no log and no Helm release (tested).
 
 **Proof, second layer (D17).**
 - `make verify-boundary` also starts a `psql` pod in each zone, with that

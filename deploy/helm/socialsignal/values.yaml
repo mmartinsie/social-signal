@@ -17,10 +17,13 @@ database:
   port: 5432
   name: socialsignal
 
-# Per-zone credentials, created by `make start` outside Helm (D13).
+# Per-zone credentials, created by `make start` outside Helm (D13, D21).
 credentials:
   migrator: db-migrator
   ingestor: db-ingestor
+  # Optional Bluesky app password from .env; only the hashtag ingestor
+  # mounts it (A6).
+  bluesky: bluesky-credentials
 
 # Ports the NetworkPolicies open between components.
 ports:
@@ -41,15 +44,26 @@ ingressController:
     app.kubernetes.io/name: traefik
 
 ingestor:
-  # A CronJob (A8): one run every 5 minutes, never two at once.
-  schedule: "*/5 * * * *"
-  # A run is stopped after this long. Keep it shorter than the schedule's
+  # One CronJob per kind of subscription (A8, D19, D21), never two runs of
+  # the same kind at once.
+  schedules:
+    handles: "*/5 * * * *"
+    # With credentials, every run logs in once, and Bluesky allows 300
+    # logins per day per account: 72 a day leaves room for manual runs.
+    hashtags: "*/20 * * * *"
+  # A run is stopped after this long. Keep it shorter than the shortest
   # interval, or a hung run would make the next one be skipped.
   runDeadlineSeconds: 240
+  # Handles: the public, cached AppView.
   blueskyPublicApiUrl: https://public.api.bsky.app
-  # One page per handle and run (1-100); the worker summarises the last 50
-  # posts of the last 7 days (A2).
+  # Hashtags without credentials: the AppView itself (the public one always
+  # blocks search). With credentials: log in at the entryway (D20).
+  blueskySearchApiUrl: https://api.bsky.app
+  blueskyEntrywayUrl: https://bsky.social
+  # One page per subscription and run (1-100); the worker summarises the
+  # last 50 posts of the last 7 days (A2).
   postsPerHandle: 50
+  postsPerHashtag: 50
   # The account's posts and its own threads, not its replies to other
   # accounts (D18). Checked by the ingestor: Bluesky ignores unknown values.
   authorFeedFilter: posts_and_author_threads

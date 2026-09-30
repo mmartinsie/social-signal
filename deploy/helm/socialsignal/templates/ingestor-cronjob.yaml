@@ -1,17 +1,22 @@
-# Handle ingestor (A8, D18, D19). A CronJob in the ingest zone, the only one
-# with internet access: each run reads the latest posts of every subscribed
-# handle from Bluesky and stores them in PostgreSQL. The `ingestor`
-# NetworkPolicy selects its pods by app.kubernetes.io/component.
+{{- /*
+Ingestors (A8, D18-D21): one CronJob per kind of subscription, in the
+ingest zone, the only one with internet access. Both run the same image
+with a different subcommand. Only the hashtag one mounts the optional
+Bluesky credentials. The `ingestor` NetworkPolicy selects both through
+app.kubernetes.io/component.
+*/ -}}
+{{- range $kind := list "handles" "hashtags" }}
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: ingestor
-  namespace: {{ .Values.namespaces.ingest }}
+  name: ingestor-{{ $kind }}
+  namespace: {{ $.Values.namespaces.ingest }}
   labels:
-    {{- include "socialsignal.labels" . | nindent 4 }}
+    {{- include "socialsignal.labels" $ | nindent 4 }}
     app.kubernetes.io/component: ingestor
 spec:
-  schedule: {{ .Values.ingestor.schedule | quote }}
+  schedule: {{ index $.Values.ingestor.schedules $kind | quote }}
   # Never two runs at once: no duplicate work, no doubled load on Bluesky.
   concurrencyPolicy: Forbid
   # A run that cannot start within 2 minutes of its time (e.g. the cluster
@@ -23,55 +28,47 @@ spec:
   jobTemplate:
     metadata:
       labels:
-        {{- include "socialsignal.labels" . | nindent 8 }}
+        {{- include "socialsignal.labels" $ | nindent 8 }}
         app.kubernetes.io/component: ingestor
     spec:
       # No immediate retry: the next scheduled run is the retry (A8).
       backoffLimit: 0
-      activeDeadlineSeconds: {{ .Values.ingestor.runDeadlineSeconds }}
+      activeDeadlineSeconds: {{ $.Values.ingestor.runDeadlineSeconds }}
       template:
         metadata:
           labels:
-            {{- include "socialsignal.labels" . | nindent 12 }}
+            {{- include "socialsignal.labels" $ | nindent 12 }}
             app.kubernetes.io/component: ingestor
-            app.kubernetes.io/instance: {{ .Release.Name }}
+            app.kubernetes.io/instance: {{ $.Release.Name }}
         spec:
           restartPolicy: Never
           automountServiceAccountToken: false
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 10001
-            runAsGroup: 10001
-            fsGroup: 10001
-            seccompProfile:
-              type: RuntimeDefault
+            {{- include "socialsignal.podSecurityContext" $ | nindent 12 }}
           containers:
             - name: ingestor
-              image: {{ required "images.ingestor is required (set by make start)" .Values.images.ingestor }}
+              image: {{ required "images.ingestor is required (set by make start)" $.Values.images.ingestor }}
               imagePullPolicy: IfNotPresent
-              command: [python, -m, socialsignal_ingestor, handles]
+              command: [python, -m, socialsignal_ingestor, {{ $kind }}]
               env:
-                - name: DB_HOST
-                  value: {{ .Values.database.host | quote }}
-                - name: DB_PORT
-                  value: {{ .Values.database.port | quote }}
-                - name: DB_NAME
-                  value: {{ .Values.database.name | quote }}
-                - name: DB_USER
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.credentials.ingestor }}
-                      key: username
-                # Read from a mounted file, so the password is not in the
-                # process environment.
-                - name: DB_PASSWORD_FILE
-                  value: /run/secrets/db/password
+                {{- include "socialsignal.databaseEnv" (dict "root" $ "secret" $.Values.credentials.ingestor) | nindent 16 }}
+                {{- if eq $kind "handles" }}
                 - name: BLUESKY_PUBLIC_API_URL
-                  value: {{ .Values.ingestor.blueskyPublicApiUrl | quote }}
+                  value: {{ $.Values.ingestor.blueskyPublicApiUrl | quote }}
                 - name: INGEST_POSTS_PER_HANDLE
-                  value: {{ .Values.ingestor.postsPerHandle | quote }}
+                  value: {{ $.Values.ingestor.postsPerHandle | quote }}
                 - name: INGEST_AUTHOR_FEED_FILTER
-                  value: {{ .Values.ingestor.authorFeedFilter | quote }}
+                  value: {{ $.Values.ingestor.authorFeedFilter | quote }}
+                {{- else }}
+                - name: BLUESKY_SEARCH_API_URL
+                  value: {{ $.Values.ingestor.blueskySearchApiUrl | quote }}
+                - name: BLUESKY_ENTRYWAY_URL
+                  value: {{ $.Values.ingestor.blueskyEntrywayUrl | quote }}
+                - name: INGEST_POSTS_PER_HASHTAG
+                  value: {{ $.Values.ingestor.postsPerHashtag | quote }}
+                - name: BLUESKY_CREDENTIALS_DIR
+                  value: /run/secrets/bluesky
+                {{- end }}
               resources:
                 requests:
                   cpu: 50m
@@ -79,19 +76,23 @@ spec:
                 limits:
                   memory: 256Mi
               securityContext:
-                allowPrivilegeEscalation: false
-                readOnlyRootFilesystem: true
-                capabilities:
-                  drop: [ALL]
+                {{- include "socialsignal.containerSecurityContext" $ | nindent 16 }}
               volumeMounts:
-                - name: credentials
-                  mountPath: /run/secrets/db
+                {{- include "socialsignal.databaseVolumeMount" $ | nindent 16 }}
+                {{- if eq $kind "hashtags" }}
+                - name: bluesky-credentials
+                  mountPath: /run/secrets/bluesky
                   readOnly: true
+                {{- end }}
           volumes:
-            - name: credentials
+            {{- include "socialsignal.databaseVolume" (dict "secret" $.Values.credentials.ingestor) | nindent 12 }}
+            {{- if eq $kind "hashtags" }}
+            # Optional: without .env there is no Secret and the directory is
+            # empty, so hashtags are searched without authentication (A6).
+            - name: bluesky-credentials
               secret:
-                secretName: {{ .Values.credentials.ingestor }}
-                items:
-                  - key: password
-                    path: password
+                secretName: {{ $.Values.credentials.bluesky }}
+                optional: true
                 defaultMode: 0440
+            {{- end }}
+{{- end }}

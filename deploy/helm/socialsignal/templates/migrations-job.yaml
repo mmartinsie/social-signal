@@ -28,33 +28,14 @@ spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        runAsGroup: 10001
-        fsGroup: 10001
-        seccompProfile:
-          type: RuntimeDefault
+        {{- include "socialsignal.podSecurityContext" . | nindent 8 }}
       containers:
         - name: migrations
           image: {{ required "images.migrations is required (set by make start)" .Values.images.migrations }}
           imagePullPolicy: IfNotPresent
           command: [python, -m, socialsignal_migrations]
           env:
-            - name: DB_HOST
-              value: {{ .Values.database.host | quote }}
-            - name: DB_PORT
-              value: {{ .Values.database.port | quote }}
-            - name: DB_NAME
-              value: {{ .Values.database.name | quote }}
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.credentials.migrator }}
-                  key: username
-            # Read from a mounted file, so the password is not in the
-            # process environment.
-            - name: DB_PASSWORD_FILE
-              value: /run/secrets/db/password
+            {{- include "socialsignal.databaseEnv" (dict "root" . "secret" .Values.credentials.migrator) | nindent 12 }}
           resources:
             requests:
               cpu: 50m
@@ -62,19 +43,8 @@ spec:
             limits:
               memory: 256Mi
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
+            {{- include "socialsignal.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
-            - name: credentials
-              mountPath: /run/secrets/db
-              readOnly: true
+            {{- include "socialsignal.databaseVolumeMount" . | nindent 12 }}
       volumes:
-        - name: credentials
-          secret:
-            secretName: {{ .Values.credentials.migrator }}
-            items:
-              - key: password
-                path: password
-            defaultMode: 0440
+        {{- include "socialsignal.databaseVolume" (dict "secret" .Values.credentials.migrator) | nindent 8 }}

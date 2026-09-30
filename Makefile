@@ -34,6 +34,8 @@ ARCH            ?=
 
 CLUSTER         := socialsignal
 KUBE_CONTEXT    := k3d-$(CLUSTER)
+# Optional Bluesky credentials for hashtag search (A6, see .env.example).
+BLUESKY_ENV_FILE ?= .env
 K3D_CONFIG      := deploy/k3d/cluster.yaml
 PLATFORM_DIR    := deploy/platform
 
@@ -53,7 +55,7 @@ SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
   CURL_IMAGE='$(CURL_IMAGE)' \
   NODE_IMAGES='$(NODE_IMAGES)' WORKLOAD_IMAGES='$(WORKLOAD_IMAGES)' \
   IMAGES_DIR='$(IMAGES_DIR)' ARCH='$(ARCH)' \
-  CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' \
+  CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' BLUESKY_ENV_FILE='$(BLUESKY_ENV_FILE)' \
   K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)' \
   PYTHON_IMAGE='$(PYTHON_IMAGE)' UV_IMAGE='$(UV_IMAGE)' APP_IMAGES='$(APP_IMAGES)' \
   POSTGRES_IMAGE='$(POSTGRES_IMAGE)' \
@@ -76,6 +78,7 @@ app-images: ## Build our own images and add them to the offline bundle
 start: ## Start the local cluster from the offline bundle and deploy the system
 	@$(SCRIPT_ENV) sh scripts/cluster-up.sh
 	@$(SCRIPT_ENV) sh scripts/db-secrets.sh
+	@$(SCRIPT_ENV) sh scripts/bluesky-secret.sh
 	@$(SCRIPT_ENV) sh scripts/deploy.sh
 
 stop: ## Stop the local cluster, keeping its state

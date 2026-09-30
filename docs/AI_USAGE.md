@@ -439,3 +439,41 @@ memory is trimmed so it does not duplicate them.
     git ignores it.
   - It ran a throwaway script, outside the repository, that printed only
     the DID, the PDS host, the password's length and the result counts.
+
+### Step 6b: credentials Secret and hashtag CronJob (session 3)
+
+- **Author decided:**
+  - a schedule of every 20 minutes for hashtags rather than the proposed
+    15, to leave room for manual runs (72 logins a day);
+  - "do it" for 6b.
+
+  The agent restated the plan before running anything. The author had not
+  answered whether quotes should be accepted in `.env`. The agent chose to
+  strip one surrounding pair, and said so.
+- **Agent built:**
+  - `scripts/bluesky-secret.sh`;
+  - one template for both CronJobs;
+  - the Helm helpers that had been pending since D19;
+  - the Makefile hook.
+- **Agent verified its own claim:** the script avoids `kubectl apply`
+  because the agent expected it to copy the password in clear text into an
+  annotation. The agent confirmed it with a fake Secret before recording
+  it.
+- **Tests the agent added beyond the plan, and reported:**
+  - the script's parsing, with a fake `kubectl` and fake files, before
+    touching the cluster;
+  - a Job pointed at `public.api.bsky.app`, where Bluesky's search block is
+    active, to see the real warning path.
+- **Secret handling:**
+  - The agent never printed the password.
+  - To prove that it appears in no log or Helm release, it read it into a
+    shell variable and counted matches with `grep -F`. The value was
+    therefore briefly a command argument on the author's own machine,
+    though never printed. The product scripts never pass it as an
+    argument.
+- **Verified:**
+  - both hashtag paths end to end, plus the blocked path;
+  - the Secret only in `ingest`, only mounted by `ingestor-hashtags`, with
+    no annotation;
+  - `verify-boundary` 27/27;
+  - 0 image pulls.
