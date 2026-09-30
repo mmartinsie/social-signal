@@ -1,0 +1,80 @@
+# Schema migrations (D1, D16). A Helm hook that runs before every install and
+# upgrade, before any other resource of this release is created or changed.
+# If it fails, Helm aborts the release and no new application version is
+# rolled out. Its NetworkPolicy lives in the socialsignal-db chart, which is
+# installed first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrations
+  namespace: {{ .Values.namespaces.data }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrator
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    # Keep the finished Job, and its logs, until the next run replaces it.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "socialsignal.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrator
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrations
+          image: {{ required "images.migrations is required (set by make start)" .Values.images.migrations }}
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, socialsignal_migrations]
+          env:
+            - name: DB_HOST
+              value: {{ .Values.database.host | quote }}
+            - name: DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.credentials.migrator }}
+                  key: username
+            # Read from a mounted file, so the password is not in the
+            # process environment.
+            - name: DB_PASSWORD_FILE
+              value: /run/secrets/db/password
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: credentials
+              mountPath: /run/secrets/db
+              readOnly: true
+      volumes:
+        - name: credentials
+          secret:
+            secretName: {{ .Values.credentials.migrator }}
+            items:
+              - key: password
+                path: password
+            defaultMode: 0440

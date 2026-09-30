@@ -48,7 +48,18 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 
 ## 3. Architecture
 
-*TBD.*
+*Components and flows: TBD.*
+
+**Data model (migration `0001`, D16).** All tables are owned by `migrator`;
+the application roles only get what their zone needs:
+
+| Table | Purpose | `ingestor` | `analysis` |
+|---|---|---|---|
+| `subscriptions` | handle or hashtag, unique per (`kind`, `value`) | SELECT | SELECT, INSERT, DELETE |
+| `posts` | one row per Bluesky post, keyed by its `at://` URI (idempotent ingestion) | INSERT | SELECT |
+| `subscription_posts` | which subscriptions a post belongs to | INSERT | SELECT |
+| `post_sentiments` | the label of each post, classified once (A9) | none | SELECT, INSERT, UPDATE |
+| `summaries` | one precomputed summary per subscription (A3) | none | SELECT, INSERT, UPDATE, DELETE |
 
 ## 4. Key decisions
 
@@ -156,6 +167,18 @@ upgrading PostgreSQL does not touch the application.
 With CloudNativePG, minor upgrades become a rolling update plus a
 switchover, with near-zero outage.
 
+**Images tagged by content (D15).** Each image's tag is a hash of its
+content, so it changes if and only if the image changes: a rebuild without
+changes is a no-op, while any change produces a new tag, a new spec and a
+rollout. This matters because the cluster cannot pull and uses
+`IfNotPresent`: a reused tag would keep running old code.
+
+**Migrations gate every release (D16).** Alembic runs as a
+`pre-install/pre-upgrade` hook Job, before any new application pod. If it
+fails, Helm aborts the upgrade and the previous version keeps running; this
+was tested by forcing a failure. Rollbacks do not undo migrations, so every
+migration must be backward compatible (expand/contract).
+
 *Application rolling updates: TBD (step 10).*
 
 ## 8. Delivery to isolated environments
@@ -205,4 +228,7 @@ same tarballs would be pushed there instead. See
   internal-only resolver.
 - **Bundle integrity:** images are pinned by tag and only the k3s tarball is
   checksum-verified. Pin every image by digest and ship a signed manifest of
-  the bundle.
+  the bundle, including build provenance for our own images, whose
+  attestations are disabled to keep tags deterministic (D15).
+- **Readable release versions:** combine a human version (e.g. `0.2.0`)
+  with the content digest for our images (D15).

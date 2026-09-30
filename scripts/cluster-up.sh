@@ -36,6 +36,12 @@ done
 for image in $WORKLOAD_IMAGES; do
   [ -f "$(image_tarball "$bundle/workload" "$image")" ] || fail "Missing $image in the bundle: run 'make build'."
 done
+# Our own images, built by `make build` and tagged by content (D15).
+[ -f "$bundle/app/images.txt" ] || fail "No application images in $bundle/app: run 'make build'."
+APP_REFS=$(grep -v '^#' "$bundle/app/images.txt" | cut -d= -f2-)
+for image in $APP_REFS; do
+  [ -f "$(image_tarball "$bundle/app" "$image")" ] || fail "Missing $image in the bundle: run 'make build'."
+done
 # k3d needs an absolute host path for the volume mount.
 bundle_abs=$(cd "$bundle" && pwd)
 
@@ -88,7 +94,7 @@ while [ "$streak" -lt 3 ]; do
   sleep 5
 done
 
-# --- 5. Workload images: import into every node, then verify ----------------
+# --- 5. Workload and application images: import, then verify ----------------
 in_all_nodes() { # $1 = image
   for node in $nodes; do
     docker exec "$node" crictl inspecti "$1" >/dev/null 2>&1 || return 1
@@ -96,26 +102,29 @@ in_all_nodes() { # $1 = image
 }
 
 to_import=""
-for image in $WORKLOAD_IMAGES; do
-  if in_all_nodes "$image"; then
-    echo "ok    $image (already in every node)"
+queue() { # directory image
+  if in_all_nodes "$2"; then
+    echo "ok    $2 (already in every node)"
   else
-    to_import="$to_import $(image_tarball "$bundle/workload" "$image")"
+    to_import="$to_import $(image_tarball "$1" "$2")"
   fi
-done
+}
+for image in $WORKLOAD_IMAGES; do queue "$bundle/workload" "$image"; done
+for image in $APP_REFS; do queue "$bundle/app" "$image"; done
+
 if [ -n "$to_import" ]; then
   echo "import$to_import"
   # The list is space-separated on purpose (paths never contain spaces).
   # shellcheck disable=SC2086
   k3d image import --cluster "$CLUSTER" $to_import
   # k3d only logs a failed import on a node and still exits 0, so check.
-  for image in $WORKLOAD_IMAGES; do
+  for image in $WORKLOAD_IMAGES $APP_REFS; do
     in_all_nodes "$image" || fail "Import of $image failed on at least one node."
   done
-  echo "ok    workload images present in every node"
+  echo "ok    images present in every node"
 fi
 
-# --- 6. Wait for the system components (CoreDNS, Traefik) ------------------
+# --- 6. Wait for the system components (CoreDNS, Traefik) -------------------
 # On first creation their pods wait until k3s has imported the air-gap
 # tarball (pulls are blocked), which takes minutes on a slow disk.
 # Traefik's Deployment only appears once k3s' Helm install job has run.

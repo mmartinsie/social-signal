@@ -109,23 +109,7 @@ spec:
         - protocol: TCP
           port: {{ . }}
         {{- end }}
----
 # -------------------------------------------------------------------- data
-# The PostgreSQL ingress rule lives with the database, in the socialsignal-db
-# chart (policy postgres-clients).
-# Migration Job (Alembic, step 4b): talks only to PostgreSQL.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: migrator
-  namespace: {{ $ns.data }}
-  labels:
-    {{- include "socialsignal.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: migrator
-  policyTypes: [Ingress, Egress]
-  egress:
-    {{- include "socialsignal.egressDNS" . | nindent 4 }}
-    {{- include "socialsignal.egressPostgres" . | nindent 4 }}
+# Both data-zone policies (postgres-clients and migrator-egress) live in the
+# socialsignal-db chart, installed first: the migration hook runs before any
+# resource of this chart exists.

@@ -1,0 +1,18 @@
+[project]
+name = "socialsignal-migrations"
+version = "0.1.0"
+description = "Alembic schema migrations for SocialSignal, run as a Helm pre-install/pre-upgrade Job."
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "psycopg[binary]>=3.3.6",
+    "socialsignal-common",
+    "sqlalchemy>=2.1.1",
+]
+
+[tool.uv.sources]
+socialsignal-common = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13.0"]
+build-backend = "uv_build"

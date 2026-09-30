@@ -1,0 +1,10 @@
+# Allow-list: the build context holds only what the Python images need.
+# Everything else (.git, .venv, dist/ with the image bundle, docs, any .env)
+# never reaches the Docker daemon.
+*
+!pyproject.toml
+!uv.lock
+!packages/
+!services/
+**/__pycache__
+**/*.py[cod]

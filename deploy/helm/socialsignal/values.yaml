@@ -5,6 +5,21 @@ namespaces:
   data: data
   analysis: analysis
 
+# Our own images, tagged by content (D15). Set by `make start` from the
+# bundle's images.txt, never by hand.
+images:
+  migrations: ""
+
+# How every component reaches PostgreSQL (the socialsignal-db release).
+database:
+  host: postgres.data.svc.cluster.local
+  port: 5432
+  name: socialsignal
+
+# Per-zone credentials, created by `make start` outside Helm (D13).
+credentials:
+  migrator: db-migrator
+
 # Ports the NetworkPolicies open between components.
 ports:
   api: 8000

@@ -1,15 +1,13 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 4a)._
+_Last updated: 2026-09-30 (step 4b)._
 
 ## Current step
 
-**Step 4a: PostgreSQL release, roles, credentials and network checks.**
-Done.
+**Step 4b: Python image pipeline, Alembic migrations as a Helm hook, schema
+and grants.** Done.
 
-Next: **step 4b**: the Python image pipeline (Dockerfile with uv), the
-Alembic migrations member, the migration Job as a Helm hook, the initial
-schema with per-role grants, and database privilege checks.
+Next: **step 4c**: database privilege checks in `make verify-boundary`.
 
 ## Steps
 
@@ -22,7 +20,8 @@ schema with per-role grants, and database privilege checks.
 | 3b | k3d cluster from the bundle, namespaces and default-deny (`make start/stop/clean/distclean`) | Done (2026-09-30) |
 | 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Done (2026-09-30) |
 | 4a | PostgreSQL in its own release, login roles, per-zone credentials, network checks | Done (2026-09-30) |
-| 4b | Python image pipeline, Alembic migrations (Helm hook), schema and grants | Pending |
+| 4b | Python image pipeline, Alembic migrations (Helm hook), schema and grants | Done (2026-09-30) |
+| 4c | Database privilege checks in `make verify-boundary` | Pending |
 | 5 | Handle ingestor, end to end into PostgreSQL | Pending |
 | 6 | Hashtag ingestor with authentication | Pending |
 | 7 | Offline LLM server and classification smoke test | Pending |
@@ -36,16 +35,20 @@ schema with per-role grants, and database privilege checks.
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 4b:
-  - Alembic lives in a new workspace member, `services/migrations`, and
-    runs as a `pre-install/pre-upgrade` Job in `data` using
-    `data/db-migrator`.
-  - The first own image needs a tag that changes on every build (D4); the
-    tag must reach `make start`.
-  - Add database privilege checks: `ingestor` cannot read `summaries`;
-    `analysis` cannot write `posts`.
-  - A test must connect over the network, never via `127.0.0.1`, which the
-    official image trusts without a password (D14).
+- Step 4c, privilege checks, each over the network (never via `127.0.0.1`,
+  which the official image trusts without a password, D14) and inside a
+  rolled-back transaction:
+  - `ingestor` can read `subscriptions` and insert into `posts`, but cannot
+    read `summaries`, write `post_sentiments` or create tables;
+  - `analysis` can read `posts` and write `summaries`, but cannot insert
+    into `posts` or create tables.
+
+  Also check what the application steps will rely on:
+  - `analysis` can insert into `subscriptions` (identity column) with
+    INSERT alone;
+  - `ingestor` can run `INSERT … ON CONFLICT DO NOTHING` with INSERT alone;
+  - deleting a subscription as `analysis` cascades to `subscription_posts`
+    and `summaries`.
 - Steps 5 and 9: pods must carry `app.kubernetes.io/component`, and Services
   must also select `app.kubernetes.io/instance`, so that the
   `verify-boundary` test pods never receive traffic (D12).
@@ -81,4 +84,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 | Date | Steps | Time | Notes |
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
-| 2026-09-30 | 2-4a | *TBD* | Session 2 (WSL) |
+| 2026-09-30 | 2-4b | *TBD* | Session 2 (WSL) |

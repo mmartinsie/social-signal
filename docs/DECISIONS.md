@@ -325,9 +325,13 @@ decisions, **E** = development environment, **R** = repository layout.
       PostgreSQL upgrade is a `helm upgrade` of its release only.
     - The application reaches the database by its Service name, so it does
       not care how the database is deployed.
-  - *Trade-off:* two releases to keep in step. The `postgres` NetworkPolicy
-    moved to the database chart as `postgres-clients`, while the clients'
-    matching egress rules stay in the application chart.
+  - *Trade-off:* two releases to keep in step. The data zone's policies
+    live in the database chart: `postgres-clients`, and since step 4b
+    `migrator-egress` (D16). The clients' matching egress rules stay in the
+    application chart.
+  - *Step 4b:* `make start` now calls `scripts/deploy.sh`, which installs
+    both releases and passes the application images from the bundle's
+    `images.txt`.
 
 ### D3. Ingress through Traefik
 
@@ -639,6 +643,104 @@ decisions, **E** = development environment, **R** = repository layout.
     network client must use SCRAM-SHA-256.
   - `local-path` pins the volume, and so the pod, to one node.
 
+### D15. Python images: one Dockerfile, tagged by content (step 4b)
+
+- **Decision:**
+  - `docker/python-service.Dockerfile` builds every Python service,
+    parametrised by `PACKAGE` and `SERVICE_DIR`. It follows uv's Docker
+    guide:
+    - uv 0.12.21 copied from its image;
+    - a dependencies-only layer (`uv sync --frozen --no-install-workspace`)
+      that stays cached until `uv.lock` changes;
+    - then the service plus `packages/`, installed `--no-editable`;
+    - a final stage on `python:3.12.14-slim-trixie` with only the `.venv`,
+      running as uid 10001, with no uv and no sources.
+  - Only the service's own directory is copied, so a change in another
+    service neither rebuilds the image nor changes its tag.
+  - `.dockerignore` is an allow-list (`pyproject.toml`, `uv.lock`,
+    `packages/`, `services/`): `.git`, `dist/`, docs and any `.env` never
+    reach the build.
+  - The tag is **the first 12 hex digits of the image ID**, a hash of its
+    content (the author chose option A). `scripts/build-images.sh` saves the
+    image to `dist/images/<arch>/app/` and writes the reference to
+    `images.txt`, which `make start` imports and passes to Helm. Git's
+    revision goes in a comment in `images.txt`, not in the image, where a
+    label would change the tag on every commit.
+- **Alternatives for the tag:**
+  - B, the git commit: readable, but fails without `.git` (the zip may not
+    have it), and uncommitted changes need a `-dirty-<time>` suffix that
+    changes on every build.
+  - C, the version in `pyproject.toml`: most readable, but it must be bumped
+    by hand, and a forgotten bump leaves nodes running the old image.
+- **Why:**
+  - The cluster cannot pull and uses `IfNotPresent` (D9), so a reused tag
+    would keep running the old code.
+  - Helm only rolls out when the rendered spec changes.
+  - A content tag changes *if and only if* the image changes, with no
+    dependency on git or on human discipline.
+- **Lesson (found by testing):** the first two builds of identical code got
+  different tags. BuildKit adds a provenance attestation, with per-build
+  metadata, to the image index, so the index ID never repeats even though
+  the `linux/amd64` image inside is identical. The build now uses
+  `--provenance=false --sbom=false`.
+- **Verified:**
+  - three builds in a row give the same tag;
+  - a change in another service keeps the tag; a change in the service or
+    in `packages/common` changes it; reverting gives back the original tag;
+  - the image runs as uid 10001, with no uv and no `/src`, and works with a
+    read-only root filesystem.
+- **Trade-off:**
+  - Tags are not human-readable. Combining a release version with the
+    digest is an open item.
+  - Old tags accumulate in the nodes' containerd until kubelet's image GC
+    removes them.
+  - Building for another architecture (`ARCH=arm64` on amd64) needs QEMU
+    emulation, which this WSL host lacks (`systemd-binfmt` fails). Reviewers
+    build natively.
+  - Without the attestations there is no build provenance; signing the
+    bundle is an open item.
+
+### D16. Schema migrations: Alembic in a Helm hook Job (step 4b)
+
+- **Decision:**
+  - `services/migrations` (`socialsignal-migrations`: alembic 1.20.0,
+    SQLAlchemy 2.1.1, psycopg 3.3.6) runs as
+    `python -m socialsignal_migrations`.
+  - Alembic is configured in code: no `alembic.ini`, the connection comes
+    from the environment, the password from a mounted file, and
+    `lock_timeout=10s` / `statement_timeout=60s` so it never waits forever
+    on a lock.
+  - In the application chart it is a `pre-install,pre-upgrade` hook Job in
+    `data`:
+    - non-root, read-only root filesystem, no ServiceAccount token;
+    - `backoffLimit: 2`, `activeDeadlineSeconds: 300`;
+    - `before-hook-creation`, so the last Job and its logs stay until the
+      next run.
+  - Revision `0001` creates `subscriptions`, `posts`, `subscription_posts`,
+    `post_sentiments` and `summaries`, with the per-role grants the author
+    approved. All tables are owned by `migrator`; nothing is granted to
+    `PUBLIC`.
+- **Second hook ordering issue:** the Job's own NetworkPolicy was in the
+  application chart. On a first install the hook would run before it
+  exists, and default-deny would cut it off. It moved to the database
+  chart, which is installed first, as `migrator-egress`. It got a new name
+  because an existing cluster already had a `migrator` policy owned by the
+  application release, and Helm refuses to adopt it.
+- **Why:** migrations run exactly once per release and *before* any new
+  application pod. If they fail, Helm aborts the release and no new code is
+  rolled out.
+- **Verified:**
+  - the first run applies `0001` (tables, owner and grants as designed);
+  - a new image re-runs the hook as a no-op;
+  - forcing a failure (a non-existent database) made Helm report
+    `pre-upgrade hooks failed`. The release was marked failed and the
+    previous revision kept serving; `make start` recovered it.
+- **Trade-off:**
+  - Rollbacks do not undo migrations, so each one must be backward
+    compatible (expand/contract).
+  - Hook Jobs are not managed as part of the release (Helm docs).
+  - Until step 4c the grants are only checked by inspection.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -785,3 +887,9 @@ External facts the decisions above depend on.
 | k3s has `--secrets-encryption` (aescbc by default); it is disabled in this cluster | `k3s server --help`; `k3s secrets-encrypt status` | 2026-09-30 |
 | CNPG: minor = rolling update + switchover; major = offline in-place `pg_upgrade` or logical-replication blue/green | cloudnative-pg.io/docs/devel/postgres_upgrades | 2026-09-30 |
 | `tianon/postgres-upgrade:17-to-18` exists; `18-to-19` does not | Docker Hub tags API | 2026-09-30 |
+| `python:3.12.14-slim-trixie` is the latest 3.12 slim; `ghcr.io/astral-sh/uv:0.12.21` exists for amd64 and arm64 | Docker Hub tags API; `docker buildx imagetools inspect` | 2026-09-30 |
+| Latest alembic 1.20.0, SQLAlchemy 2.1.1, psycopg 3.3.6, all supporting Python 3.12 | PyPI JSON API | 2026-09-30 |
+| uv's Docker pattern: `--frozen --no-install-workspace` for a cached dependency layer, then `--no-editable`, copy only `.venv` | docs.astral.sh/uv/guides/integration/docker | 2026-09-30 |
+| `uv_build` includes the non-package `alembic/` directory in the wheel | `uv build` and wheel listing | 2026-09-30 |
+| BuildKit's default provenance attestation makes the image index ID differ on every build of identical content | Local test (D15) | 2026-09-30 |
+| A failed `pre-upgrade` hook aborts the Helm upgrade and leaves the previous revision deployed | Local test (D16) | 2026-09-30 |

@@ -253,3 +253,44 @@ memory is trimmed so it does not duplicate them.
   - after deleting the pod, it is back in about 6 s, with its data intact
     and without re-running the init script;
   - 0 image pulls.
+
+### Step 4b: image pipeline, migrations and schema (session 2)
+
+- **Agent proposed and built:**
+  - one uv-based Dockerfile for all Python services;
+  - the migrations member (programmatic Alembic, password from a file,
+    lock timeouts);
+  - the hook Job;
+  - the build and deploy scripts.
+
+  Before implementing, it found a second hook-ordering issue: the Job's
+  NetworkPolicy would not exist on a first install.
+- **Author decided:**
+  - split step 4 again;
+  - approve the schema and grants table as proposed;
+  - move the migrator policy to the database chart;
+  - tag images by content (option A), after asking what the tag was about;
+    the agent explained it with the three options.
+- **Problems found by testing:**
+  - Two builds of identical code got different tags. The agent compared
+    layers, history and the image index, found BuildKit's provenance
+    attestation, and disabled it. After that, three builds give the same
+    tag.
+  - The migration Job's log was empty (no logging configuration without
+    `alembic.ini`). The agent added it, which also exercised the update
+    path: new tag, then the hook re-runs as a no-op.
+  - Agent mistake: to check that a change in another service keeps the
+    tag, it appended probe lines to files and reverted them with
+    `git checkout`. That did not work for the new, untracked migrations
+    file. The agent noticed from the output, removed the line by hand and
+    confirmed that the tag returned to the original value.
+- **Verified:**
+  - the tag changes only when the image content changes;
+  - the image runs as non-root, without uv, and works with a read-only
+    root filesystem;
+  - migration `0001` created the tables with the approved owner and
+    grants;
+  - a forced migration failure made Helm abort the upgrade and keep the
+    previous revision;
+  - `verify-boundary` 16/16;
+  - 0 image pulls.

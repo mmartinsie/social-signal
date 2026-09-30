@@ -34,15 +34,26 @@ Machine resources: *TBD*.
 make build
 ```
 
-This is the only step that needs access to registries. It downloads every
-third-party image, pinned to an exact version, into an offline bundle under
-`dist/images/<arch>/`: about 320 MB so far, including the k3s system images,
-which are checksum-verified. `make start` then runs the cluster from this
-bundle without pulling anything. Running it again skips whatever is already
-downloaded. To build a bundle for another architecture, use
-`make build ARCH=arm64` (or `ARCH=amd64`).
+This is the only step that needs internet access to registries and PyPI.
+It does two things:
 
-*Application images: TBD.*
+1. **Third-party images:** downloads every one of them, pinned to an exact
+   version, into an offline bundle under `dist/images/<arch>/`. That
+   includes the k3s system images, which are checksum-verified, and
+   PostgreSQL.
+2. **Our images:** builds them with Docker from one Dockerfile
+   (`docker/python-service.Dockerfile`, Python 3.12 with uv, non-root).
+   Each one is tagged with a hash of its content and added to the bundle,
+   with the references written to `dist/images/<arch>/app/images.txt`.
+
+The bundle is about 490 MB so far. `make start` then runs everything from
+it without pulling anything. Running `make build` again skips whatever is
+already downloaded, and an unchanged image keeps its tag.
+
+`make build ARCH=arm64` (or `ARCH=amd64`) prepares the bundle for another
+architecture. Third-party images are simply downloaded for it, but building
+our own images for a foreign architecture needs QEMU emulation on the build
+host.
 
 ## Run
 
@@ -60,7 +71,9 @@ any registry. `make start` then:
 2. generates random database passwords as Kubernetes Secrets, one per zone,
    so each zone only holds its own;
 3. installs two Helm releases: `socialsignal-db` (PostgreSQL, in `data`),
-   then `socialsignal` (the application).
+   then `socialsignal` (the application). The application's schema
+   migration runs first, as a Helm hook; if it fails, nothing new is rolled
+   out.
 
 Running it again is safe: it creates, starts or leaves each piece as needed,
 and keeps existing passwords.
@@ -118,8 +131,10 @@ be downloaded again.
 ├── services/
 │   ├── ingestor/            # Bluesky -> PostgreSQL (ingest zone)
 │   ├── worker/              # sentiment classification and summaries (analysis zone)
-│   └── api/                 # HTTP API and minimal UI (analysis zone)
-├── deploy/                  # k3d cluster config, platform manifests, Helm chart
+│   ├── api/                 # HTTP API and minimal UI (analysis zone)
+│   └── migrations/          # Alembic schema migrations (Helm hook Job, data zone)
+├── docker/                  # the Dockerfile shared by every Python service
+├── deploy/                  # k3d cluster config, platform manifests, Helm charts
 ├── scripts/                 # helper scripts called by the Makefile
 ├── docs/                    # decisions, progress, AI usage log
 ├── DESIGN.md                # design document

@@ -20,6 +20,13 @@ POSTGRES_IMAGE  := postgres:18.6-alpine3.23
 NODE_IMAGES     := $(K3S_IMAGE) $(K3D_PROXY_IMAGE) $(K3D_TOOLS_IMAGE)
 WORKLOAD_IMAGES := $(CURL_IMAGE) $(POSTGRES_IMAGE)
 
+# Our own images: built by `make build` from one Dockerfile, tagged by content
+# (D15). Base images are only needed at build time, not in the bundle.
+PYTHON_IMAGE    := python:3.12.14-slim-trixie
+UV_IMAGE        := ghcr.io/astral-sh/uv:0.12.21
+# name:package:directory
+APP_IMAGES      := migrations:socialsignal-migrations:services/migrations
+
 IMAGES_DIR      := dist/images
 # Empty means the Docker host's architecture; override with ARCH=amd64|arm64.
 ARCH            ?=
@@ -46,25 +53,29 @@ SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
   NODE_IMAGES='$(NODE_IMAGES)' WORKLOAD_IMAGES='$(WORKLOAD_IMAGES)' \
   IMAGES_DIR='$(IMAGES_DIR)' ARCH='$(ARCH)' \
   CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' \
-  K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)'
+  K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)' \
+  PYTHON_IMAGE='$(PYTHON_IMAGE)' UV_IMAGE='$(UV_IMAGE)' APP_IMAGES='$(APP_IMAGES)' \
+  POSTGRES_IMAGE='$(POSTGRES_IMAGE)' \
+  DB_RELEASE='$(DB_RELEASE)' DB_CHART='$(DB_CHART)' DB_NAMESPACE='$(DB_NAMESPACE)' \
+  APP_RELEASE='$(APP_RELEASE)' APP_CHART='$(APP_CHART)' APP_NAMESPACE='$(APP_NAMESPACE)'
 
-.PHONY: help build images start stop clean distclean verify-boundary
+.PHONY: help build images app-images start stop clean distclean verify-boundary
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: images ## Install dependencies and build all container images
+build: images app-images ## Install dependencies and build all container images
 
 images: ## Download every third-party image into the offline bundle
 	@$(SCRIPT_ENV) sh scripts/bundle-images.sh
 
+app-images: ## Build our own images and add them to the offline bundle
+	@$(SCRIPT_ENV) sh scripts/build-images.sh
+
 start: ## Start the local cluster from the offline bundle and deploy the system
 	@$(SCRIPT_ENV) sh scripts/cluster-up.sh
 	@$(SCRIPT_ENV) sh scripts/db-secrets.sh
-	helm upgrade --install $(DB_RELEASE) $(DB_CHART) --set image=$(POSTGRES_IMAGE) \
-	  --kube-context $(KUBE_CONTEXT) --namespace $(DB_NAMESPACE) --wait --timeout 10m
-	helm upgrade --install $(APP_RELEASE) $(APP_CHART) \
-	  --kube-context $(KUBE_CONTEXT) --namespace $(APP_NAMESPACE) --wait --timeout 10m
+	@$(SCRIPT_ENV) sh scripts/deploy.sh
 
 stop: ## Stop the local cluster, keeping its state
 	k3d cluster stop $(CLUSTER)

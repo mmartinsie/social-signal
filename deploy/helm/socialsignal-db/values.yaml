@@ -26,3 +26,9 @@ resources:
 namespaces:
   ingest: ingest
   analysis: analysis
+
+# Cluster DNS, for the migration Job's egress rule.
+dns:
+  namespace: kube-system
+  podLabels:
+    k8s-app: kube-dns
