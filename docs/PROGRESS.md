@@ -1,13 +1,13 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 4b)._
+_Last updated: 2026-09-30 (step 4c)._
 
 ## Current step
 
-**Step 4b: Python image pipeline, Alembic migrations as a Helm hook, schema
-and grants.** Done.
+**Step 4c: database privilege checks in `make verify-boundary`.** Done:
+27/27 checks.
 
-Next: **step 4c**: database privilege checks in `make verify-boundary`.
+Next: **step 5**: the handle ingestor, end to end into PostgreSQL.
 
 ## Steps
 
@@ -21,7 +21,7 @@ Next: **step 4c**: database privilege checks in `make verify-boundary`.
 | 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Done (2026-09-30) |
 | 4a | PostgreSQL in its own release, login roles, per-zone credentials, network checks | Done (2026-09-30) |
 | 4b | Python image pipeline, Alembic migrations (Helm hook), schema and grants | Done (2026-09-30) |
-| 4c | Database privilege checks in `make verify-boundary` | Pending |
+| 4c | Database privilege checks in `make verify-boundary` | Done (2026-09-30) |
 | 5 | Handle ingestor, end to end into PostgreSQL | Pending |
 | 6 | Hashtag ingestor with authentication | Pending |
 | 7 | Offline LLM server and classification smoke test | Pending |
@@ -35,20 +35,10 @@ Next: **step 4c**: database privilege checks in `make verify-boundary`.
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 4c, privilege checks, each over the network (never via `127.0.0.1`,
-  which the official image trusts without a password, D14) and inside a
-  rolled-back transaction:
-  - `ingestor` can read `subscriptions` and insert into `posts`, but cannot
-    read `summaries`, write `post_sentiments` or create tables;
-  - `analysis` can read `posts` and write `summaries`, but cannot insert
-    into `posts` or create tables.
-
-  Also check what the application steps will rely on:
-  - `analysis` can insert into `subscriptions` (identity column) with
-    INSERT alone;
-  - `ingestor` can run `INSERT … ON CONFLICT DO NOTHING` with INSERT alone;
-  - deleting a subscription as `analysis` cascades to `subscription_posts`
-    and `summaries`.
+- Step 5: the ingestor must write with `ON CONFLICT DO NOTHING` **without a
+  conflict target**. `ON CONFLICT (uri)` needs `SELECT` on `uri`, which the
+  ingestor does not have (D17). Until the API exists (step 9), the demo
+  subscription is created with `psql` as `analysis`.
 - Steps 5 and 9: pods must carry `app.kubernetes.io/component`, and Services
   must also select `app.kubernetes.io/instance`, so that the
   `verify-boundary` test pods never receive traffic (D12).
@@ -84,4 +74,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 | Date | Steps | Time | Notes |
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
-| 2026-09-30 | 2-4b | *TBD* | Session 2 (WSL) |
+| 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |

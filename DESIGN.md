@@ -122,13 +122,45 @@ enforced. *Checks against the LLM (step 7): TBD.*
 **Least privilege in the database (D1, D13).**
 - Three login roles:
   - `migrator` owns the database and is the only one with DDL;
-  - `ingestor` and `analysis` get `CONNECT` plus per-table grants
-    (step 4b).
+  - `ingestor` and `analysis` get `CONNECT` plus the per-table grants in
+    §3.
 - None of them is superuser or can create roles or databases.
 - Their passwords are random and generated on the cluster by `make start`,
   never by Helm, the repository or the bundle. Each zone only holds its own
   (`ingest` has only the ingestor's).
 - Every network client must authenticate with SCRAM-SHA-256.
+
+**Proof, second layer (D17).**
+- `make verify-boundary` also starts a `psql` pod in each zone, with that
+  zone's labels and only that zone's Secret. It logs in over the network
+  and tries what the role may and may not do.
+- Every check runs inside a transaction that is rolled back.
+- *denied* only counts if PostgreSQL answers `permission denied`.
+
+```
+PASS  db-ingestor ingest     sql read subscriptions                           expected allowed
+PASS  db-ingestor ingest     sql insert a post twice (idempotent)             expected allowed
+PASS  db-ingestor ingest     sql read summaries                               expected denied
+PASS  db-ingestor ingest     sql write post_sentiments                        expected denied
+PASS  db-ingestor ingest     sql delete subscriptions                         expected denied
+PASS  db-ingestor ingest     sql create table                                 expected denied
+PASS  db-analysis analysis   sql read posts and links                         expected allowed
+PASS  db-analysis analysis   sql subscribe, then write its summary twice      expected allowed
+PASS  db-analysis analysis   sql insert posts                                 expected denied
+PASS  db-analysis analysis   sql create table                                 expected denied
+PASS  lifecycle   data       sql subscribe, ingest, summarise, unsubscribe    expected allowed
+```
+
+The last line runs the whole data flow in one rolled-back transaction, each
+step as the role that will perform it (`SET LOCAL ROLE`):
+1. the API subscribes;
+2. the ingestor stores and links a post;
+3. the worker classifies it and summarises;
+4. the API unsubscribes, and the cascade removes the link and the summary.
+
+The flow works with exactly the grants in §3 and nothing more, because
+foreign-key checks and cascades run with the table owner's privileges.
+Granting the ingestor one extra privilege makes the run fail (tested).
 
 ## 6. High availability
 
@@ -217,6 +249,11 @@ same tarballs would be pushed there instead. See
 - **Secrets at rest:** enable k3s `--secrets-encryption`, one line in
   `deploy/k3d/cluster.yaml`, applied when the cluster is created. Today
   Secrets are only base64-encoded in the datastore.
+- **Encryption in transit to PostgreSQL:** the official image runs with
+  `ssl = off`, so connections from the zones travel unencrypted inside the
+  cluster network. Enable TLS on the server, with a certificate from an
+  internal CA (e.g. cert-manager), and require `sslmode=verify-full` in the
+  clients.
 - **External secret manager:** Vault, External Secrets Operator, Sealed
   Secrets or SOPS, for rotation and audit of the database and Bluesky
   credentials (D13).

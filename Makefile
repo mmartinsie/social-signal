@@ -86,5 +86,5 @@ clean: ## Delete the local cluster (the image bundle in dist/ is kept)
 distclean: clean ## Delete the local cluster and the image bundle
 	rm -rf dist
 
-verify-boundary: ## Prove that the analysis zone cannot reach the internet
+verify-boundary: ## Prove the network boundary and the database privileges
 	@$(SCRIPT_ENV) sh scripts/verify-boundary.sh

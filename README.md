@@ -93,18 +93,21 @@ The first start takes a few minutes while k3s imports its system images
 make verify-boundary
 ```
 
-Proves the security boundary against the real NetworkPolicies, in about
-40 seconds (16 checks). It starts a temporary curl pod with the labels of
-each component (ingestor, API, worker, LLM), so the same policies apply to it
-as to the real pods, plus an "outsider" pod in `default`. It then checks
-that:
+Proves the security boundary against the real NetworkPolicies and database
+grants, in about 45 seconds (27 checks). It starts temporary pods that carry
+the labels of each component (ingestor, API, worker, LLM), so the same
+policies apply to them as to the real pods, plus an "outsider" pod in
+`default`. It then checks that:
 
 - the ingestor reaches Bluesky and a public IP, but not the Kubernetes API
   (private ranges are excluded);
 - the API and the worker resolve names but cannot connect to the internet;
 - the LLM cannot even resolve names;
 - PostgreSQL is reachable from the ingestor, the API and the worker, but
-  not from the LLM or from the outsider pod.
+  not from the LLM or from the outsider pod;
+- each zone, logged in with its own credentials, can do exactly what its
+  database role needs and gets `permission denied` for the rest. Every
+  database check is rolled back, so it leaves no data behind.
 
 It prints a PASS/FAIL table, deletes the pods, and exits non-zero if any
 check fails. *Checks against the LLM: TBD.*

@@ -294,3 +294,31 @@ memory is trimmed so it does not duplicate them.
     previous revision;
   - `verify-boundary` 16/16;
   - 0 image pulls.
+
+### Step 4c: database privilege checks (session 2)
+
+- **Agent proposed and built:**
+  - one `psql` pod per database role, in its own zone, with that zone's
+    labels and Secret;
+  - a `sql` check inside `BEGIN … ROLLBACK`, where *denied* only counts if
+    PostgreSQL answers `permission denied`;
+  - one cross-role lifecycle scenario using `SET LOCAL ROLE`, because the
+    ingestor can only link posts to a subscription that the analysis zone
+    created.
+- **Author decided:** approved the proposal, including a controlled
+  sabotage test.
+- **Problem found before building:** from what it recalled of PostgreSQL's
+  internals, the agent expected `ON CONFLICT (uri) DO NOTHING` to need
+  `SELECT` on `uri`, which the ingestor lacks. It said so in the proposal
+  instead of assuming either way. A rolled-back probe confirmed it
+  (`permission denied`), and the PostgreSQL docs state it. The ingestor
+  will use `ON CONFLICT DO NOTHING` without a target, so the grants stay
+  unchanged.
+- **Verified:**
+  - `verify-boundary` passes 27/27, and no rows or tables are left behind;
+  - sabotage: an extra `GRANT SELECT ON summaries TO ingestor` produced
+    exactly one FAIL and a non-zero exit;
+  - after the `REVOKE`, `\dp` matched the saved copy and the run passed
+    27/27 again.
+- **Checked against documentation:** the `SET ROLE` privilege semantics and
+  the `ON CONFLICT` privilege rules (postgresql.org).
