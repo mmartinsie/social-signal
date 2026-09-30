@@ -477,3 +477,64 @@ memory is trimmed so it does not duplicate them.
     no annotation;
   - `verify-boundary` 27/27;
   - 0 image pulls.
+
+### Step 7a: the LLM image (session 3)
+
+- **Agent checked before proposing:**
+  - which Gemma 4 E2B GGUF files exist, whether they are gated, and their
+    sizes, checksums and licences (Hugging Face API);
+  - whether the file downloads without a token (response headers only);
+  - llama.cpp's image tags and platforms, its `gemma4` support, and the
+    server's options (`--offline`, `--reasoning`, `/health`, JSON schema
+    output).
+
+  It found that Google publishes an official QAT Q4_0 GGUF under Apache
+  2.0.
+- **Author decided** the agent's three recommendations: the official QAT
+  file, one LLM replica with `Recreate`, and splitting the step in two.
+- **Agent built:** `scripts/fetch-model.sh`, `docker/llm.Dockerfile`, the
+  `model` target, and a `bundle_image` function in `build-images.sh` that
+  the Python images and the LLM image share.
+- **The author noticed an apparent hang.** The agent had said "about 2
+  minutes" for the build, and `--quiet` showed nothing while Docker spent
+  about 6 minutes compressing the 3.35 GB layer. The agent inspected the
+  running processes and the disk writes and explained it; nothing was
+  stuck. Its time estimate had been wrong.
+- **Found by testing:**
+  - The non-root server could not open the model. `COPY --chmod=0444` had
+    also given mode 0444 to the `/models` directory. The agent fixed the
+    Dockerfile.
+  - Before rebuilding (8 minutes), the agent ran the quality evaluation on
+    the first image, started as root only for that run: if E2B had failed,
+    a rebuild with E4B would have been needed anyway.
+  - The `response_format` shape documented in llama.cpp's README was
+    ignored by v0.5.0. The agent compared three shapes against the running
+    server and chose OpenAI's, which is enforced.
+  - Agent mistake: its readiness loop in the shell waited for a log line
+    that the server never prints. It reported a load time of 247 s; the
+    server's own log showed 44 s. The documented figure is 44 s.
+- **Verified:** 14 of 14 on a small labelled set (sarcasm and Spanish
+  included), a median of 2.95 s per post, 3.0-3.5 GiB of memory, and 98 s
+  for one summary-sized prompt, which is input for step 8.
+- **Agent hypothesis refuted by its own test.** The final non-root smoke
+  test used a shortened sarcastic post, which came out positive.
+  - The agent first attributed this to its shorter prompt. It re-ran the
+    test with the evaluation's prompt and the post still failed.
+  - A third run, with both wordings on the corrected image, showed that the
+    wording is the cause: with the explicit complaint the post is
+    negative, without it positive.
+
+  The documents now say that 14 of 14 is optimistic, and a proper
+  evaluation is an open item.
+- **Interrupted build.** A reset of the VS Code session killed `make` during
+  `docker save`. The script had already deleted the previous tarball, so
+  `images.txt` pointed to a file that no longer existed. The agent found
+  it, changed the script to delete old tarballs only after the new one is
+  complete, and re-ran the target (the build came from the cache).
+- **Author decided:**
+  - delete the old local image with the permission bug;
+  - version the evaluation.
+
+  The agent turned its throwaway script into `tools/llm_eval.py`, added
+  the failing sarcastic post as a known hard case, and ran it exactly as
+  its docstring documents: 14 of 15.

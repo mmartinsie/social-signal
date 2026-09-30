@@ -30,7 +30,9 @@ decisions, **E** = development environment, **R** = repository layout.
   **llama.cpp server** (official multi-arch image). The weights are fetched
   during `make build` and baked into the image; they are never downloaded at
   runtime. Model output is constrained with a JSON schema. **E4B** is the
-  fallback if E2B quality is not good enough.
+  fallback if E2B quality is not good enough. *Step 7a: Google's official
+  QAT Q4_0 file. E2B scored 14/14 on a small labelled set, so the fallback
+  is not needed (D22).*
 - **Why:**
   - "Gemma 4 A2B" is not a published variant. The family is E2B, E4B, 12B,
     26B A4B and 31B (verified, see [Verified facts](#5-verified-facts)). E2B
@@ -1192,6 +1194,123 @@ decisions, **E** = development environment, **R** = repository layout.
     log and no Helm release.
   - **Also:** `verify-boundary` 27/27, and 0 image pulls.
 
+### D22. The LLM image: Google's QAT GGUF baked into llama.cpp (step 7a)
+
+- **Decision:**
+  - **Model:** Google's official `google/gemma-4-E2B-it-qat-q4_0-gguf`,
+    file `gemma-4-E2B_q4_0-it.gguf` (3.35 GB).
+    - It is quantised to Q4_0 with **quantisation-aware training** (QAT).
+    - Licence Apache 2.0, and the repository is not gated.
+    - It is pinned to repository revision `675cff42…` and checked against
+      its sha256. The multimodal projector (`mmproj`) is not used: we only
+      classify text.
+  - **Download:** `make model`, part of `make build`, runs
+    `scripts/fetch-model.sh`.
+    - It downloads to `dist/models/` and resumes an interrupted download.
+    - It verifies the sha256, keeps a verified file, and deletes a
+      corrupted one.
+  - **Image:** `socialsignal/llm`, from `docker/llm.Dockerfile`.
+    - It is `FROM ghcr.io/ggml-org/llama.cpp:server-v0.5.0` (amd64 and
+      arm64) plus the model at `/models/model.gguf`, with labels that
+      record the source file and revision.
+    - The build context is only `dist/models/`, and there is no `RUN`, so
+      it builds for either architecture without emulation.
+    - It is tagged by content and saved to the bundle like our other
+      images (D15).
+  - **What defines the artefact is fixed in the image's `ENTRYPOINT`:**
+    - the model;
+    - its API name, `gemma-4-E2B-it-qat-q4_0`, which the worker will store
+      with every label;
+    - `--offline`, so the server never touches the network;
+    - `--no-webui`;
+    - the listening address and port.
+
+    Tuning (threads, context size, slots, reasoning) comes from the chart
+    as arguments.
+  - **Non-root:** the image runs as `USER 10001:10001`. The upstream image
+    runs as root.
+  - **Output format** (for the worker, step 8):
+    - `response_format` in OpenAI's form, `{"type": "json_schema",
+      "json_schema": {"name", "schema"}}`, with an `enum` of the three
+      labels;
+    - the server started with `--reasoning off`;
+    - `temperature` 0.
+- **Alternatives:**
+  - **`ggml-org/gemma-4-E2B-it-GGUF` at Q4_0** (2.84 GB). Quantised after
+    training, with no QAT.
+  - **Gemma 4 E4B.** A1's fallback, not needed (see *Verified*).
+  - **The weights on a volume, or on each node, instead of in the image.**
+    Less data to import, but the image would no longer be the single,
+    versioned artefact that can be carried into an isolated site (A1, D4).
+- **Why:**
+  - QAT keeps quality close to the unquantised model at 4 bits.
+  - The file comes from the model's publisher, under a clear licence, and
+    needs no token.
+  - Pinning plus the checksum make the build reproducible and detect
+    tampering.
+- **Trade-off:**
+  - `make build` downloads 3.35 GB the first time, and the bundle grows to
+    3.8 GB.
+  - Building the image takes about 6 minutes on this HDD, because Docker
+    compresses the 3.35 GB layer, plus about 2 minutes for `docker save`.
+    That only happens again when the model or the base image changes.
+  - The base image is pinned by tag, not digest (open item, as for the
+    others).
+- **Found by testing:**
+  - **`COPY --chmod=0444`** also gave that mode to the `/models` directory
+    that BuildKit created. Without the execute bit, the non-root server
+    got `Permission denied`. The fix was to drop `--chmod`: the file keeps
+    its 0644 mode and is owned by root, so the server can read it but not
+    change it.
+  - **llama.cpp's server README documents `{"type": "json_schema",
+    "schema": …}`.** Version v0.5.0 ignores it: the model answered with its
+    own `{"sentiment": …}`. OpenAI's form, and `{"type": "json_object",
+    "schema": …}`, are enforced.
+  - **`build-images.sh` deleted the previous tarball of an image before
+    saving the new one.** A reset of the editor session killed `docker
+    save` halfway, and `images.txt` was left pointing to a deleted file. Old
+    tarballs, and any interrupted `.part`, are now removed only once the new
+    tarball is complete.
+- **Verified** (Docker, `--network none`, 4 CPUs, 5 GB memory limit;
+  context 8192, 1 slot, 4 threads, reasoning off):
+  - **Load:** about 44 s from a cold cache (reading 3.35 GB from the HDD).
+    Memory: 3.0 GiB after loading, 3.5 GiB after a long prompt.
+  - **Labelled set:** 14 of 14 correct, including two sarcastic posts and
+    two in Spanish. A mixed post ("great food, slow service") came out
+    negative.
+  - **20 real posts from the database:** 18 neutral and 2 positive, which
+    is plausible (questions about apples, tech announcements). Every
+    answer was a valid label.
+  - **Latency per post:** median 2.95 s, maximum 5.5 s.
+  - **One summary-sized prompt** (50 posts, 2,573 tokens): 98 s. Prompt
+    processing ran at 27 tokens/s and generation at 9 tokens/s. This is a
+    preliminary input for step 8: one LLM sentence per subscription and
+    run is expensive on CPU.
+
+  The quality run used the first build, started as root only because of
+  the permission bug above; the model and server were identical.
+  - **The corrected image** (`llm:dec1162d9ccc`) was then checked the way
+    the pod will run:
+    - uid 10001, read-only root filesystem, no capabilities,
+      `no-new-privileges`, `--network none` (only the `lo` interface);
+    - `/health` answered 200, and 2.9 GiB of memory after loading;
+    - it reproduced the evaluation's answers on the same sarcastic posts.
+  - **Sarcasm is fragile and depends on the wording.** "Wow, only three
+    hours on hold. Truly world-class service." came out *positive*, with
+    both a short prompt and the evaluation's prompt, which names sarcasm.
+    With "…on hold with customer support…", as in the evaluation, it came
+    out *negative*.
+
+    So 14 of 14 on 15 examples is optimistic. It rules out a useless model,
+    but it is not an accuracy figure. This is A1's accepted trade-off, it
+    supports excluding replies to other accounts (D18), and a proper
+    evaluation set is an open item.
+  - **The evaluation is versioned** as `tools/llm_eval.py`, with the
+    reworded sarcastic post added as a known hard case. Run as its
+    docstring says, on the corrected image: 14 of 15 (only the hard case
+    fails), median 2.28 s per post. `tools/` is outside the images' build
+    context.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1317,6 +1436,11 @@ External facts the decisions above depend on.
 | `createSession` at `bsky.social` with an app password returns the DID document with the account's PDS; `searchPosts` sent to that PDS with the Bearer token works | Real call with the author's account (D20) | 2026-09-30 |
 | `kubectl apply` of a Secret copies its `stringData`, in clear text, into the `kubectl.kubernetes.io/last-applied-configuration` annotation | Local test with a fake value (D21) | 2026-09-30 |
 | A pod whose `optional: true` Secret volume refers to a missing Secret starts, with an empty directory at the mount path | Local test (D21) | 2026-09-30 |
+| `google/gemma-4-E2B-it-qat-q4_0-gguf` is Google's official QAT Q4_0 GGUF: `gemma-4-E2B_q4_0-it.gguf`, 3,349,516,256 bytes, sha256 `fa401b55…6634`, Apache 2.0, not gated, downloadable without a token | Hugging Face API; `curl -I` | 2026-09-30 |
+| `ghcr.io/ggml-org/llama.cpp:server-v0.5.0` (2026-09-23) exists for amd64, arm64 and s390x; its entrypoint is `/app/llama-server`, and it runs as root | `docker buildx imagetools inspect` | 2026-09-30 |
+| llama.cpp supports the `gemma4` architecture; the server has `--offline`, `--no-webui`, `--alias`, `--reasoning off`, and `/health` (503 while loading, 200 when ready) | llama.cpp `src/llama-arch.cpp`, server README at v0.5.0 | 2026-09-30 |
+| llama-server v0.5.0 enforces `response_format` in OpenAI's form (`json_schema: {name, schema}`) and `{"type": "json_object", "schema"}`, but ignores the documented `{"type": "json_schema", "schema"}` | Local test (D22) | 2026-10-01 |
+| BuildKit `COPY --chmod=0444 file /newdir/file` also gives mode 0444 to the directory it creates | Local test (D22): `ls -ld /models` | 2026-10-01 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

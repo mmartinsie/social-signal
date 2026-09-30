@@ -34,22 +34,31 @@ Machine resources: *TBD*.
 make build
 ```
 
-This is the only step that needs internet access to registries and PyPI.
-It does two things:
+This is the only step that needs internet access to registries, PyPI and
+Hugging Face. It does three things:
 
 1. **Third-party images:** downloads every one of them, pinned to an exact
    version, into an offline bundle under `dist/images/<arch>/`. That
    includes the k3s system images, which are checksum-verified, and
    PostgreSQL.
-2. **Our images** (for now `migrations` and `ingestor`): builds them with
-   Docker from one Dockerfile (`docker/python-service.Dockerfile`, Python
-   3.12 with uv, non-root).
-   Each one is tagged with a hash of its content and added to the bundle,
-   with the references written to `dist/images/<arch>/app/images.txt`.
+2. **The LLM weights:** downloads Google's Gemma 4 E2B (QAT Q4_0 GGUF,
+   3.35 GB) into `dist/models/`, pinned to a repository revision and
+   checked against its sha256. An interrupted download resumes on the next
+   run.
+3. **Our images:** builds them with Docker, each tagged with a hash of its
+   content and added to the bundle, with the references written to
+   `dist/images/<arch>/app/images.txt`:
+   - `migrations` and `ingestor`, from one Dockerfile
+     (`docker/python-service.Dockerfile`, Python 3.12 with uv, non-root);
+   - `llm`: llama.cpp's server with the model baked in
+     (`docker/llm.Dockerfile`, non-root), so nothing is downloaded at
+     runtime.
 
-The bundle is about 540 MB so far. `make start` then runs everything from
-it without pulling anything. Running `make build` again skips whatever is
-already downloaded, and an unchanged image keeps its tag.
+The bundle is about 3.8 GB, 3.5 GB of it the LLM image. The first build
+takes about 10 minutes on an HDD: the download, plus compressing and saving
+the LLM image. `make start` then runs everything from the bundle without
+pulling anything. Running `make build` again skips whatever is already
+downloaded, and an unchanged image keeps its tag.
 
 `make build ARCH=arm64` (or `ARCH=amd64`) prepares the bundle for another
 architecture. Third-party images are simply downloaded for it, but building
@@ -170,6 +179,13 @@ whether Bluesky is blocking that.
 uv run pytest
 ```
 
+### Evaluate the LLM (development)
+
+`tools/llm_eval.py` runs the LLM image with no network and checks it on a
+small hand-labelled set (sarcasm and Spanish included), reporting the
+accuracy and the latency per post. How to run it is in its docstring. It is
+a smoke check, not a benchmark.
+
 ## Stop and clean up
 
 ```sh
@@ -190,6 +206,7 @@ be downloaded again.
 ├── packages/
 │   └── common/              # shared settings and database access
 ├── tests/                   # unit tests (outside the images' build context)
+├── tools/                   # development tools, e.g. the LLM evaluation
 ├── services/
 │   ├── ingestor/            # Bluesky -> PostgreSQL (ingest zone)
 │   ├── worker/              # sentiment classification and summaries (analysis zone)

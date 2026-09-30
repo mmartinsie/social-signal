@@ -21,9 +21,11 @@ How the ambiguous parts of the brief were interpreted. The options considered
 and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretation-of-the-brief).
 
 - **A1. Model:** "Gemma 4 A2B" is not a published variant. We use Gemma 4
-  E2B, the smallest one, quantised (GGUF Q4) and served on CPU by llama.cpp.
-  The weights are baked into the image at build time, never downloaded at
-  runtime. E4B is the fallback.
+  E2B, the smallest one: Google's official GGUF, quantised to Q4_0 with
+  quantisation-aware training, served on CPU by llama.cpp. The weights are
+  baked into the image at build time, never downloaded at runtime. E4B was
+  the fallback, and was not needed: E2B labelled 14 of 14 test posts
+  correctly, sarcasm included (D22).
 - **A2. "Recent":** the last 50 posts from the last 7 days (configurable).
 - **A3. Summary:** dominant label (positive / neutral / negative), counts per
   label and one LLM-generated sentence, plus the item count and the last
@@ -257,7 +259,8 @@ and carried to the target. The cluster is also configured so it *cannot*
 pull: every registry is mirrored to an unresolvable address and k3s'
 fallback to the real registry is disabled (D9). A connected laptop therefore
 behaves like an isolated site, and an image missing from the bundle fails
-visibly instead of being downloaded. On a site with its own registry (e.g. Harbor), the
+visibly instead of being downloaded. The LLM's weights travel the same way,
+inside the LLM image, pinned and checksum-verified at build time (D22). On a site with its own registry (e.g. Harbor), the
 same tarballs would be pushed there instead. See
 [D4](docs/DECISIONS.md#d4-getting-images-into-the-cluster-offline-image-bundle-step-3a).
 
@@ -315,3 +318,12 @@ same tarballs would be pushed there instead. See
 - **OAuth instead of an app password:** an app password can act as the
   account, although the ingestor only reads. Bluesky's OAuth allows
   narrower permissions (D20).
+- **A real evaluation of the classifier:** the model was only checked on
+  15 hand-labelled posts (14 correct), and a sarcastic post reworded
+  without an explicit complaint was misclassified (D22). Label a few
+  hundred real posts, measure accuracy per class, and use that set to
+  compare prompts and models (E2B against E4B), and to catch regressions
+  when either changes.
+- **Build progress for the LLM image:** the build prints nothing for about
+  6 minutes while Docker compresses the 3.35 GB layer, which looks like a
+  hang. Show BuildKit's progress for that image.

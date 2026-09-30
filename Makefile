@@ -28,6 +28,17 @@ UV_IMAGE        := ghcr.io/astral-sh/uv:0.12.21
 APP_IMAGES      := migrations:socialsignal-migrations:services/migrations \
                    ingestor:socialsignal-ingestor:services/ingestor
 
+# The LLM (A1, D22): Google's official Gemma 4 E2B GGUF, quantised to Q4_0
+# with quantisation-aware training, pinned to a repository revision and
+# checked against its sha256. `make build` bakes it into the llama.cpp server
+# image; nothing is downloaded at runtime.
+LLAMA_SERVER_IMAGE := ghcr.io/ggml-org/llama.cpp:server-v0.5.0
+MODEL_REPO      := google/gemma-4-E2B-it-qat-q4_0-gguf
+MODEL_REVISION  := 675cff42a74c774d6cb76f76d8eacb49b48c9b93
+MODEL_FILE      := gemma-4-E2B_q4_0-it.gguf
+MODEL_SHA256    := fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634
+MODELS_DIR      := dist/models
+
 IMAGES_DIR      := dist/images
 # Empty means the Docker host's architecture; override with ARCH=amd64|arm64.
 ARCH            ?=
@@ -58,21 +69,27 @@ SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
   CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' BLUESKY_ENV_FILE='$(BLUESKY_ENV_FILE)' \
   K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)' \
   PYTHON_IMAGE='$(PYTHON_IMAGE)' UV_IMAGE='$(UV_IMAGE)' APP_IMAGES='$(APP_IMAGES)' \
+  LLAMA_SERVER_IMAGE='$(LLAMA_SERVER_IMAGE)' MODELS_DIR='$(MODELS_DIR)' \
+  MODEL_REPO='$(MODEL_REPO)' MODEL_REVISION='$(MODEL_REVISION)' \
+  MODEL_FILE='$(MODEL_FILE)' MODEL_SHA256='$(MODEL_SHA256)' \
   POSTGRES_IMAGE='$(POSTGRES_IMAGE)' \
   DB_RELEASE='$(DB_RELEASE)' DB_CHART='$(DB_CHART)' DB_NAMESPACE='$(DB_NAMESPACE)' \
   APP_RELEASE='$(APP_RELEASE)' APP_CHART='$(APP_CHART)' APP_NAMESPACE='$(APP_NAMESPACE)'
 
-.PHONY: help build images app-images start stop clean distclean verify-boundary
+.PHONY: help build images model app-images start stop clean distclean verify-boundary
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: images app-images ## Install dependencies and build all container images
+build: images model app-images ## Install dependencies and build all container images
 
 images: ## Download every third-party image into the offline bundle
 	@$(SCRIPT_ENV) sh scripts/bundle-images.sh
 
-app-images: ## Build our own images and add them to the offline bundle
+model: ## Download the LLM weights (pinned and checksum-verified)
+	@$(SCRIPT_ENV) sh scripts/fetch-model.sh
+
+app-images: ## Build our own images, the LLM's included, into the offline bundle
 	@$(SCRIPT_ENV) sh scripts/build-images.sh
 
 start: ## Start the local cluster from the offline bundle and deploy the system

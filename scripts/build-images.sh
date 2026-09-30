@@ -9,6 +9,7 @@
 # Inputs (environment, set by the Makefile):
 #   IMAGES_DIR, PYTHON_IMAGE, UV_IMAGE
 #   APP_IMAGES  space-separated name:package:directory entries
+#   LLAMA_SERVER_IMAGE, MODELS_DIR, MODEL_FILE, MODEL_REPO, MODEL_REVISION
 #   ARCH        optional: amd64 or arm64 (default: the Docker host's)
 #
 # POSIX sh on purpose: it must run with both Linux and macOS userland.
@@ -17,12 +18,17 @@ set -eu
 . "$(dirname "$0")/lib.sh"
 
 : "${IMAGES_DIR:?}" "${PYTHON_IMAGE:?}" "${UV_IMAGE:?}" "${APP_IMAGES:?}"
+: "${LLAMA_SERVER_IMAGE:?}" "${MODELS_DIR:?}" "${MODEL_FILE:?}" "${MODEL_REPO:?}" "${MODEL_REVISION:?}"
 
 ARCH=$(detect_arch)
 native=$(ARCH='' detect_arch)
 if [ "$ARCH" != "$native" ]; then
-  echo "warning: building linux/$ARCH images on a $native host needs QEMU emulation (binfmt)." >&2
+  echo "warning: building the Python images for linux/$ARCH on a $native host needs QEMU emulation (binfmt)." >&2
 fi
+[ -f "$MODELS_DIR/$MODEL_FILE" ] || {
+  echo "Missing $MODELS_DIR/$MODEL_FILE: run 'make model' (part of 'make build') first." >&2
+  exit 1
+}
 
 app_dir="$IMAGES_DIR/$ARCH/app"
 mkdir -p "$app_dir"
@@ -31,22 +37,20 @@ list_file="$app_dir/images.txt.part"
 trap 'rm -f "$iid_file" "$list_file"' EXIT
 : >"$list_file"
 
-echo "Application images for linux/$ARCH in $app_dir"
-for entry in $APP_IMAGES; do
-  IFS=: read -r name package directory <<EOF
-$entry
-EOF
+# bundle_image NAME CONTEXT [docker build options...]: build the image, tag it
+# by content, save it to the bundle unless that exact image is already there,
+# and record it in images.txt.
+bundle_image() {
+  name=$1
+  context=$2
+  shift 2
   repository="socialsignal/$name"
-  echo "build $repository ($package)"
+  echo "build $repository"
   # No provenance/SBOM attestations: BuildKit stores them in the image index
   # with per-build metadata, so the ID (and our tag) would change on every
   # build even when the image itself is identical.
   docker build --quiet --platform "linux/$ARCH" --iidfile "$iid_file" \
-    --provenance=false --sbom=false \
-    -f docker/python-service.Dockerfile \
-    --build-arg PYTHON_IMAGE="$PYTHON_IMAGE" --build-arg UV_IMAGE="$UV_IMAGE" \
-    --build-arg PACKAGE="$package" --build-arg SERVICE_DIR="$directory" \
-    . >/dev/null
+    --provenance=false --sbom=false "$@" "$context" >/dev/null
   image_id=$(cat "$iid_file")
   tag=$(printf '%s' "${image_id#sha256:}" | cut -c1-12)
   reference="$repository:$tag"
@@ -56,17 +60,37 @@ EOF
   if [ -f "$file" ]; then
     echo "ok    $reference (unchanged, already in the bundle)"
   else
-    # Replace the tarball of any previous build of this image.
-    prefix=$(printf '%s' "$repository" | tr '/:' '__')
-    for old in "$app_dir/${prefix}_"*.tar; do
-      if [ -f "$old" ]; then rm -f "$old"; fi
-    done
     docker save --platform "linux/$ARCH" -o "$file.part" "$reference"
     mv "$file.part" "$file"
     echo "ok    $reference (new build)"
   fi
+  # Only now, with the new tarball complete, remove previous builds of this
+  # image and any interrupted save: an interruption never leaves the bundle
+  # without a usable tarball (found when a session reset killed a save).
+  prefix=$(printf '%s' "$repository" | tr '/:' '__')
+  for old in "$app_dir/${prefix}_"*.tar "$app_dir/${prefix}_"*.tar.part; do
+    if [ -f "$old" ] && [ "$old" != "$file" ]; then rm -f "$old"; fi
+  done
   echo "$name=$reference" >>"$list_file"
+}
+
+echo "Application images for linux/$ARCH in $app_dir"
+# Python services: one Dockerfile, parametrised by package and directory.
+for entry in $APP_IMAGES; do
+  IFS=: read -r name package directory <<EOF
+$entry
+EOF
+  bundle_image "$name" . -f docker/python-service.Dockerfile \
+    --build-arg PYTHON_IMAGE="$PYTHON_IMAGE" --build-arg UV_IMAGE="$UV_IMAGE" \
+    --build-arg PACKAGE="$package" --build-arg SERVICE_DIR="$directory"
 done
+
+# The LLM server, with the model baked in (A1, D22). Its build context is
+# only the models directory, so no source code reaches it.
+bundle_image llm "$MODELS_DIR" -f docker/llm.Dockerfile \
+  --build-arg LLAMA_SERVER_IMAGE="$LLAMA_SERVER_IMAGE" \
+  --build-arg MODEL_FILE="$MODEL_FILE" \
+  --build-arg MODEL_SOURCE="$MODEL_REPO@$MODEL_REVISION"
 
 revision=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 {
