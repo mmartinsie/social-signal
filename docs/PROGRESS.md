@@ -1,17 +1,21 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 5a)._
+_Last updated: 2026-09-30 (step 5b)._
 
 ## Current step
 
-**Step 5a: handle ingestor code, unit tests and a real call to Bluesky.**
-Done: 25 tests pass. The code has not run against the database yet (D18).
+**Step 5b: the ingestor image and CronJob, end to end into PostgreSQL.**
+Done:
+- the CronJob runs every 5 minutes (D19);
+- 42 posts of `@bsky.app` stored, and a second run stores nothing new;
+- the failure path ends in a failed Job;
+- `verify-boundary` passes 27/27.
 
-Next: **step 5b**:
-- the ingestor image and its CronJob in the Helm chart;
-- `make build` and `make start`;
-- end to end in the cluster: a demo subscription, a manual Job run twice
-  (the second stores nothing new), and `make verify-boundary`.
+The cluster keeps the demo subscription `handle bsky.app`, so the worker
+(step 8) has posts to classify.
+
+Next: **step 6**: the hashtag ingestor with authentication. Decide first how
+the credentials are provided (A6).
 
 ## Steps
 
@@ -27,7 +31,7 @@ Next: **step 5b**:
 | 4b | Python image pipeline, Alembic migrations (Helm hook), schema and grants | Done (2026-09-30) |
 | 4c | Database privilege checks in `make verify-boundary` | Done (2026-09-30) |
 | 5a | Handle ingestor code, unit tests, real call to Bluesky | Done (2026-09-30) |
-| 5b | Ingestor image and CronJob, end to end into PostgreSQL | Pending |
+| 5b | Ingestor image and CronJob, end to end into PostgreSQL | Done (2026-09-30) |
 | 6 | Hashtag ingestor with authentication | Pending |
 | 7 | Offline LLM server and classification smoke test | Pending |
 | 8 | Summary worker | Pending |
@@ -40,14 +44,14 @@ Next: **step 5b**:
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 5b: until the API exists (step 9), the demo subscription is created
-  with `psql` as `analysis` (`SET ROLE analysis` in `postgres-0`).
-- Step 5b: `packages/common` now depends on psycopg and has `connect()`.
-  Every image copies `packages/`, so the migrations image gets a new tag
-  and its hook re-runs as a no-op. That is expected (D15).
-- Steps 5b and 9: pods must carry `app.kubernetes.io/component`, and
-  Services must also select `app.kubernetes.io/instance`, so that the
+- Until the API exists (step 9), subscriptions are created with `psql` as
+  `analysis` (`SET ROLE analysis` in `postgres-0`; see the README).
+- Steps 8 and 9: pods must carry `app.kubernetes.io/component`, and Services
+  must also select `app.kubernetes.io/instance`, so that the
   `verify-boundary` test pods never receive traffic (D12).
+- Steps 8 and 9: move the database environment and the security contexts,
+  copied today in the migration Job and the ingestor, into Helm helpers
+  (D19).
 - Step 6: decide how hashtag credentials are provided (A6).
 - Step 7: `k3d image import` copies each image into all 3 nodes, and imports
   are slow on this HDD. Measure it with the multi-GB LLM image and consider
@@ -82,4 +86,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
 | 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 | 5a | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 | 5a-5b | *TBD* | Session 3 (WSL, new conversation) |

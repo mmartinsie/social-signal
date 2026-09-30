@@ -1,0 +1,97 @@
+# Handle ingestor (A8, D18, D19). A CronJob in the ingest zone, the only one
+# with internet access: each run reads the latest posts of every subscribed
+# handle from Bluesky and stores them in PostgreSQL. The `ingestor`
+# NetworkPolicy selects its pods by app.kubernetes.io/component.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingestor
+  namespace: {{ .Values.namespaces.ingest }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingestor
+spec:
+  schedule: {{ .Values.ingestor.schedule | quote }}
+  # Never two runs at once: no duplicate work, no doubled load on Bluesky.
+  concurrencyPolicy: Forbid
+  # A run that cannot start within 2 minutes of its time (e.g. the cluster
+  # was stopped) is skipped; the next one catches up, as writes are
+  # idempotent.
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "socialsignal.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ingestor
+    spec:
+      # No immediate retry: the next scheduled run is the retry (A8).
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.ingestor.runDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "socialsignal.labels" . | nindent 12 }}
+            app.kubernetes.io/component: ingestor
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ingestor
+              image: {{ required "images.ingestor is required (set by make start)" .Values.images.ingestor }}
+              imagePullPolicy: IfNotPresent
+              command: [python, -m, socialsignal_ingestor]
+              env:
+                - name: DB_HOST
+                  value: {{ .Values.database.host | quote }}
+                - name: DB_PORT
+                  value: {{ .Values.database.port | quote }}
+                - name: DB_NAME
+                  value: {{ .Values.database.name | quote }}
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.credentials.ingestor }}
+                      key: username
+                # Read from a mounted file, so the password is not in the
+                # process environment.
+                - name: DB_PASSWORD_FILE
+                  value: /run/secrets/db/password
+                - name: BLUESKY_PUBLIC_API_URL
+                  value: {{ .Values.ingestor.blueskyPublicApiUrl | quote }}
+                - name: INGEST_POSTS_PER_HANDLE
+                  value: {{ .Values.ingestor.postsPerHandle | quote }}
+                - name: INGEST_AUTHOR_FEED_FILTER
+                  value: {{ .Values.ingestor.authorFeedFilter | quote }}
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              volumeMounts:
+                - name: credentials
+                  mountPath: /run/secrets/db
+                  readOnly: true
+          volumes:
+            - name: credentials
+              secret:
+                secretName: {{ .Values.credentials.ingestor }}
+                items:
+                  - key: password
+                    path: password
+                defaultMode: 0440

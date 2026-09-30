@@ -9,6 +9,7 @@ namespaces:
 # bundle's images.txt, never by hand.
 images:
   migrations: ""
+  ingestor: ""
 
 # How every component reaches PostgreSQL (the socialsignal-db release).
 database:
@@ -19,6 +20,7 @@ database:
 # Per-zone credentials, created by `make start` outside Helm (D13).
 credentials:
   migrator: db-migrator
+  ingestor: db-ingestor
 
 # Ports the NetworkPolicies open between components.
 ports:
@@ -39,6 +41,18 @@ ingressController:
     app.kubernetes.io/name: traefik
 
 ingestor:
+  # A CronJob (A8): one run every 5 minutes, never two at once.
+  schedule: "*/5 * * * *"
+  # A run is stopped after this long. Keep it shorter than the schedule's
+  # interval, or a hung run would make the next one be skipped.
+  runDeadlineSeconds: 240
+  blueskyPublicApiUrl: https://public.api.bsky.app
+  # One page per handle and run (1-100); the worker summarises the last 50
+  # posts of the last 7 days (A2).
+  postsPerHandle: 50
+  # The account's posts and its own threads, not its replies to other
+  # accounts (D18). Checked by the ingestor: Bluesky ignores unknown values.
+  authorFeedFilter: posts_and_author_threads
   # Internet access for the ingest zone: HTTPS only, and never towards
   # private or link-local ranges (the LAN, the cluster nodes and the
   # Kubernetes API, cloud metadata endpoints). A site whose internet access

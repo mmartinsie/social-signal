@@ -50,6 +50,18 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 
 *Components and flows: TBD.*
 
+**Ingestion (D18, D19).** A CronJob in `ingest` runs every 5 minutes. For
+each handle subscription it reads the account's latest 50 items from
+Bluesky's public API and keeps only the account's own words: its posts and
+its own threads, not reposts and not its replies to other accounts. It
+stores them in `posts`, linked to the subscription in `subscription_posts`.
+- Writes are keyed on the post's `at://` URI, so a run can be repeated at
+  no cost, and they need only `INSERT`.
+- Each subscription is stored in its own transaction.
+- An account Bluesky does not know gives a warning. A network or database
+  error fails the Job, which is then visible in `kubectl get jobs`.
+- Hashtags: step 6.
+
 **Data model (migration `0001`, D16).** All tables are owned by `migrator`;
 the application roles only get what their zone needs:
 

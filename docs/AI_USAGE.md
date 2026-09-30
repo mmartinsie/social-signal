@@ -359,3 +359,37 @@ memory is trimmed so it does not duplicate them.
   - uv accepts a `dev` dependency group in the virtual workspace root.
 
   The database writes are tested in step 5b, inside the cluster.
+
+### Step 5b: ingestor image and CronJob (session 3)
+
+- **Author decided:** "do 5b", following the plan the agent had outlined
+  when it proposed 5a:
+  - the CronJob;
+  - the image in `make build`;
+  - `make start`;
+  - a demo subscription created as `analysis`;
+  - two manual runs to show idempotency;
+  - `verify-boundary`.
+
+  The agent restated the plan before running anything.
+- **Agent built:**
+  - the CronJob template (every 5 minutes, `Forbid`, no immediate retry, a
+    run deadline shorter than the interval, the migration Job's hardening);
+  - the chart values;
+  - the new entry in `APP_IMAGES`.
+- **Agent added a check that was not in the plan, and reported it:** a
+  temporary Job pointed at a private IP. It proved the failure path: the
+  NetworkPolicy rejects the connection, the run exits 1 and the Job ends
+  `Failed`. The Job was deleted afterwards.
+- **Observed, not foreseen:** the manual Jobs had disappeared when the
+  agent went to delete them. The CronJob events showed why: the controller
+  adopts Jobs created with `--from=cronjob` and prunes them with its
+  history limit.
+- **Verified:**
+  - the image is non-root, runs with a read-only filesystem and no network,
+    and contains no sources, tests or uv;
+  - first run: 42 new posts; second run: 0; the unknown account gave only a
+    warning;
+  - a scheduled run completed on its own;
+  - `verify-boundary` 27/27;
+  - 0 image pulls.

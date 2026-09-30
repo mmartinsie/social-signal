@@ -25,7 +25,8 @@ WORKLOAD_IMAGES := $(CURL_IMAGE) $(POSTGRES_IMAGE)
 PYTHON_IMAGE    := python:3.12.14-slim-trixie
 UV_IMAGE        := ghcr.io/astral-sh/uv:0.12.21
 # name:package:directory
-APP_IMAGES      := migrations:socialsignal-migrations:services/migrations
+APP_IMAGES      := migrations:socialsignal-migrations:services/migrations \
+                   ingestor:socialsignal-ingestor:services/ingestor
 
 IMAGES_DIR      := dist/images
 # Empty means the Docker host's architecture; override with ARCH=amd64|arm64.

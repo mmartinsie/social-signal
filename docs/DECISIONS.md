@@ -929,6 +929,78 @@ decisions, **E** = development environment, **R** = repository layout.
     NetworkPolicies and reach PostgreSQL through `localhost`, which the
     image trusts without a password (D14).
 
+### D19. The ingestor runs as a CronJob (step 5b)
+
+- **Decision:** a CronJob `ingestor` in `ingest`, in the application chart.
+  - **Schedule:** every 5 minutes (`values.yaml`), with
+    `concurrencyPolicy: Forbid`.
+  - **`startingDeadlineSeconds: 120`:** a run missed by more than 2 minutes
+    (the cluster was stopped, or WSL shut it down) is skipped rather than
+    started late.
+  - **`backoffLimit: 0`:** no immediate retry; the next scheduled run is the
+    retry (A8).
+  - **`activeDeadlineSeconds: 240`** (a value): shorter than the interval, so
+    a hung run never causes the next one to be skipped under `Forbid`.
+  - **History:** the last successful Job and the last 3 failed ones are
+    kept, with their logs.
+  - **Hardening,** the same as the migration Job:
+    - uid 10001, read-only root filesystem, no capabilities, seccomp
+      `RuntimeDefault`, no ServiceAccount token;
+    - the password is read from the mounted `db-ingestor` Secret, not from
+      the environment.
+  - **Pod labels:** `app.kubernetes.io/component: ingestor`, which the
+    `ingestor` NetworkPolicy selects, plus `app.kubernetes.io/instance`
+    (D12).
+  - **Settings:** the Bluesky URL, `postsPerHandle` and `authorFeedFilter`
+    are values, passed as environment variables and validated by the
+    ingestor (D18).
+- **Alternatives:**
+  - A Deployment with an internal loop. The pod is always running and needs
+    its own logic against overlapping runs (A8).
+  - `backoffLimit` above 0. Immediate retries against a failing Bluesky add
+    load and gain nothing over the next run.
+  - A shorter schedule (1 minute) or a longer one (15 minutes).
+- **Why:**
+  - Five minutes is fresh enough for analysts following a curated set of
+    sources. The summaries are recomputed by the worker on its own schedule
+    anyway.
+  - A curated set of sources means few calls per run.
+  - The deadlines keep a stuck or late run from piling up.
+- **Trade-off:**
+  - Freshness is bounded by the ingestor's schedule plus the worker's.
+  - After `make start`, the first run happens at the next 5-minute mark. To
+    run it now: `kubectl create job --from=cronjob/ingestor`.
+  - The database environment and the security contexts are now copied in
+    two templates. They should be factored into helpers when the worker and
+    the API add more copies.
+- **Verified:**
+  - **Image:**
+    - `socialsignal/ingestor`, a 50 MB tarball;
+    - uid 10001, with a read-only root filesystem and no network;
+    - no `/src`, no tests and no uv inside;
+    - a wrong filter makes it fail at start-up.
+  - **`make start`:**
+    - the migrations image got a new tag, because `common` changed, and its
+      hook re-ran as a no-op;
+    - the CronJob was created;
+    - no image was pulled.
+  - **End to end, with `bsky.app` and a non-existent account subscribed
+    as `analysis`:**
+    - first manual run: 42 posts kept, 4 reposts skipped, 42 new posts and
+      42 new links. The unknown account gave a warning and the Job was
+      `Complete`;
+    - second run: 0 new posts, 0 new links;
+    - the first scheduled run was also `Complete`, with 0 new rows.
+  - **Database:** 42 posts, a single author, from 27 August to
+    29 September, none with `created_at` later than `fetched_at`.
+  - **Failure path:** a Job pointed at `https://10.43.0.1`, a private
+    address excluded from the ingestor's egress, got "Connection refused"
+    for both subscriptions, exited 1 and ended `Failed`.
+  - **Manual Jobs:** a Job made with `kubectl create job --from=cronjob/…`
+    is adopted by the CronJob controller (`UnexpectedJob` event) and removed
+    by its history limit.
+  - `make verify-boundary`: 27/27.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1093,3 +1165,4 @@ External facts the decisions above depend on.
 | An unknown account answers 400 `InvalidRequest: Profile not found`; a malformed one, 400 `Invalid AT identifier`; `limit=101`, 400 | Real calls | 2026-09-30 |
 | Latest httpx 0.28.1 and pytest 9.1.1 | PyPI JSON API | 2026-09-30 |
 | uv accepts `[dependency-groups]` in a virtual workspace root (`uv add --dev`) | Local test | 2026-09-30 |
+| A Job created with `kubectl create job --from=cronjob/<name>` is adopted by the CronJob controller (`UnexpectedJob` event) and counts towards its history limits | Local test (D19): CronJob events | 2026-09-30 |
