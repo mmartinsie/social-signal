@@ -538,3 +538,29 @@ memory is trimmed so it does not duplicate them.
   The agent turned its throwaway script into `tools/llm_eval.py`, added
   the failing sarcastic post as a known hard case, and ran it exactly as
   its docstring documents: 14 of 15.
+
+### Step 7b: the LLM in the cluster (session 3)
+
+- **Author decided:** "do it", following the plan the agent had outlined.
+  The agent restated it before running anything.
+- **Agent built:**
+  - the `llm` Deployment (1 replica, `Recreate`) and Service;
+  - four LLM checks in `verify-boundary`;
+  - `scripts/llm-smoke.sh` with a `make llm-smoke` target. Its
+    label-parsing `grep` was tested on a canned reply before touching the
+    cluster.
+- **Long-running steps made visible.** After the "hang" in step 7a, the
+  agent ran `make start` in the background with a timestamp on every log
+  line, watched it with a monitor that also matched failures, and gave
+  the author a one-line `tail -f` command. When the author asked how long
+  it would take, the agent answered from the log's progress and said it
+  was an estimate.
+- **A suspicion checked and withdrawn:** copies of old tarballs in k3d's
+  shared volume suggested that the 3.5 GB copy would stay there too. After
+  the import it was gone; only 104 MB from an earlier import remained.
+- **Verified:**
+  - the import took 9 minutes, in parallel into the three nodes, and each
+    node's containerd grew to about 8.5 GB;
+  - the model loaded in 39 s and uses 3.5 GiB;
+  - `verify-boundary` 31/31, `make llm-smoke` 3/3;
+  - 0 image pulls.

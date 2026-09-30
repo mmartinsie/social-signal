@@ -1,26 +1,25 @@
 # Progress
 
-_Last updated: 2026-10-01 (step 7a)._
+_Last updated: 2026-10-01 (step 7b)._
 
 ## Current step
 
-**Step 7a: the LLM image, tested locally with Docker (D22).** Done:
-- `make build` downloads Google's QAT GGUF (pinned, sha256-verified) and
-  bakes it into `socialsignal/llm`;
-- offline and non-root, it classified 14 of 15 hand-labelled posts
-  correctly; the miss is a known hard case (sarcasm without context);
-- median 2.3-3 s per post on 4 CPU threads;
-- the evaluation is versioned as `tools/llm_eval.py`.
+**Step 7b: the LLM in the cluster (D23).** Done:
+- `llm` Deployment (1 replica, `Recreate`) and Service in `analysis`;
+- it loads the model in about 40 s and uses 3.5 GiB of memory;
+- `verify-boundary` passes 31/31: only the worker reaches the LLM;
+- `make llm-smoke` passes 3/3, at about 2.5 s per post.
 
-Not deployed to the cluster yet.
+The first `make start` with the LLM image took about 12 minutes on this
+HDD, 9 of them importing it into the three nodes.
 
-Next: **step 7b**:
-- the `llm` Deployment (1 replica, `Recreate`) and Service in `analysis`;
-- measure the import of the 3.5 GB image into the three nodes;
-- the LLM checks in `verify-boundary`;
-- a classification smoke test from a pod with the worker's identity.
+Next: **step 8**, the summary worker. Decide first:
+- the tie-break rule (A3);
+- how often to write the LLM sentence, which takes 98 s over 50 posts
+  (D22).
 
-**State of the cluster** (unchanged since step 6b):
+**State of the cluster:**
+- The LLM runs on one node, and its image is present on all three.
 - The demo subscriptions `handle bsky.app` and `hashtag python` stay, so
   the worker (step 8) has posts to classify: 92 posts at the end of step 6b
   (42 and 50).
@@ -46,7 +45,7 @@ Next: **step 7b**:
 | 6a | Hashtag ingestor code, unit tests, real calls to Bluesky | Done (2026-09-30) |
 | 6b | Credentials Secret and hashtag CronJob, end to end | Done (2026-09-30) |
 | 7a | LLM image (model baked in), local evaluation | Done (2026-10-01) |
-| 7b | LLM in the cluster, boundary checks, smoke test | Pending |
+| 7b | LLM in the cluster, boundary checks, smoke test | Done (2026-10-01) |
 | 8 | Summary worker | Pending |
 | 9 | API and minimal UI | Pending |
 | 10 | High availability and zero-downtime updates | Pending |
@@ -64,10 +63,11 @@ Next: **step 7b**:
   `verify-boundary` test pods never receive traffic (D12).
 - Steps 8 and 9: use the Helm helpers from step 6b for the database
   environment and the security contexts (D21).
-- Step 7: `k3d image import` copies each image into all 3 nodes, and imports
-  are slow on this HDD. Measure it with the multi-GB LLM image and consider
-  importing it only where the LLM runs. Add the LLM checks to
-  `verify-boundary`: the worker reaches it, the API does not.
+- Step 8: the worker reaches the LLM at `http://llm.analysis.svc:8080`, with
+  the prompt and `response_format` of `tools/llm_eval.py`.
+- Step 10: the LLM image is on every node, so the LLM can be rescheduled
+  when its node is drained. Expect about 40 s without classification while
+  the model loads (D23).
 - Step 8: decide the tie-break rule for the dominant label (A3).
 - Step 8: one summary sentence over 50 posts took 98 s on CPU (D22). Decide
   how often to write it: for example only when a subscription has new
@@ -103,4 +103,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
 | 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 / 10-01 | 5a-7a | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 / 10-01 | 5a-7b | *TBD* | Session 3 (WSL, new conversation) |

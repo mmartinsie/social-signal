@@ -1,0 +1,96 @@
+# The LLM server (A1, D22, D23), in the analysis zone. The `llm`
+# NetworkPolicy lets only the worker reach it, and gives it no egress at all:
+# the model is in the image, and the server runs with --offline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm
+spec:
+  # One replica: only the batch worker uses it, and if it is down the
+  # summaries keep being served in degraded mode (A3). High availability is
+  # for the API, which the analysts use (step 10).
+  replicas: 1
+  # Recreate, not RollingUpdate: during a rolling update two pods of about
+  # 4 GiB would run side by side, which a small on-prem node (or this 10 GB
+  # laptop) cannot afford. An update is a short gap in classification.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: llm
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "socialsignal.labels" . | nindent 8 }}
+        app.kubernetes.io/component: llm
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "socialsignal.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: llm
+          image: {{ required "images.llm is required (set by make start)" .Values.images.llm }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --threads
+            - {{ .Values.llm.threads | quote }}
+            - --ctx-size
+            - {{ .Values.llm.ctxSize | quote }}
+            - --parallel
+            - {{ .Values.llm.parallel | quote }}
+            # Sentiment labels need no chain of thought.
+            - --reasoning
+            - "off"
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.llm }}
+          # /health answers 503 while the model loads and 200 once it is
+          # ready. Loading 3.35 GB from disk takes about a minute on an HDD,
+          # so the startup probe allows up to 5 minutes.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.llm.resources | nindent 12 }}
+          securityContext:
+            {{- include "socialsignal.containerSecurityContext" . | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm
+spec:
+  # The instance label keeps verify-boundary's test pod, which carries only
+  # the component label, out of the Service (D12).
+  selector:
+    app.kubernetes.io/component: llm
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.ports.llm }}
+      targetPort: http

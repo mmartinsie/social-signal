@@ -10,6 +10,7 @@ namespaces:
 images:
   migrations: ""
   ingestor: ""
+  llm: ""
 
 # How every component reaches PostgreSQL (the socialsignal-db release).
 database:
@@ -42,6 +43,23 @@ ingressController:
   namespace: kube-system
   podLabels:
     app.kubernetes.io/name: traefik
+
+# The LLM server (A1, D22, D23): the model, its name and --offline are fixed
+# in the image; these are the tuning arguments.
+llm:
+  # Measured in step 7a: about 3 s per post on 4 threads, 3.0-3.5 GiB of
+  # memory with an 8192-token context and one slot.
+  threads: 4
+  ctxSize: 8192
+  # One request at a time: the worker classifies posts one by one.
+  parallel: 1
+  resources:
+    requests:
+      cpu: "1"
+      memory: 3584Mi
+    limits:
+      cpu: "4"
+      memory: 4608Mi
 
 ingestor:
   # One CronJob per kind of subscription (A8, D19, D21), never two runs of

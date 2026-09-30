@@ -76,7 +76,7 @@ SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
   DB_RELEASE='$(DB_RELEASE)' DB_CHART='$(DB_CHART)' DB_NAMESPACE='$(DB_NAMESPACE)' \
   APP_RELEASE='$(APP_RELEASE)' APP_CHART='$(APP_CHART)' APP_NAMESPACE='$(APP_NAMESPACE)'
 
-.PHONY: help build images model app-images start stop clean distclean verify-boundary
+.PHONY: help build images model app-images start stop clean distclean verify-boundary llm-smoke
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -109,3 +109,6 @@ distclean: clean ## Delete the local cluster and the image bundle
 
 verify-boundary: ## Prove the network boundary and the database privileges
 	@$(SCRIPT_ENV) sh scripts/verify-boundary.sh
+
+llm-smoke: ## Classify three posts with the LLM, from a pod with the worker's identity
+	@$(SCRIPT_ENV) sh scripts/llm-smoke.sh

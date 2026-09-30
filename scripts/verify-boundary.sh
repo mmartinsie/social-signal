@@ -2,10 +2,10 @@
 # Prove the security boundary against the real NetworkPolicies. For each
 # component identity it starts a curl pod carrying that component's labels
 # (so exactly the same policies apply as to the real pods, whose images have
-# no curl), tries to reach the internet and PostgreSQL, and compares the
-# outcome with what the policies should allow. An "outsider" pod in the
-# `default` namespace, which has no policies, checks the database's own
-# ingress rule. Prints a PASS/FAIL table; exits 1 on any FAIL.
+# no curl), tries to reach the internet, PostgreSQL and the LLM, and compares
+# the outcome with what the policies should allow. An "outsider" pod in the
+# `default` namespace, which has no policies, checks the database's and the
+# LLM's own ingress rules. Prints a PASS/FAIL table; exits 1 on any FAIL.
 #
 # Three kinds of check:
 #   dns      `nslookup` with a timeout: "resolves" or "no-dns".
@@ -45,6 +45,7 @@ BLUESKY=https://$BLUESKY_HOST/xrpc/_health
 PUBLIC_IP=https://1.1.1.1
 KUBE_API=https://kubernetes.default.svc
 POSTGRES=postgres.data.svc:5432
+LLM=llm.analysis.svc:8080
 DB_HOST=postgres.data.svc.cluster.local
 DB_NAME=socialsignal
 
@@ -253,6 +254,13 @@ check_tcp vb-api analysis "$POSTGRES" open
 check_tcp vb-worker analysis "$POSTGRES" open
 check_tcp vb-llm analysis "$POSTGRES" blocked
 check_tcp vb-outsider default "$POSTGRES" blocked
+# The LLM: only the worker may reach it. The API is in the same zone and is
+# still blocked; the outsider's own egress is open, so its "blocked" comes
+# from the LLM's ingress rule.
+check_tcp vb-worker analysis "$LLM" open
+check_tcp vb-api analysis "$LLM" blocked
+check_tcp vb-ingestor ingest "$LLM" blocked
+check_tcp vb-outsider default "$LLM" blocked
 
 # Database privileges, per zone, with that zone's own credentials (D17).
 # Ingest zone: reads what to fetch and stores posts; nothing else.

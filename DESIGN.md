@@ -75,6 +75,15 @@ accounts.
 - Without them, it searches Bluesky's AppView directly. That works only
   while Bluesky allows unauthenticated search.
 
+**Sentiment model (A1, D22, D23).** A `llm` Deployment in `analysis` runs
+llama.cpp's server with Gemma 4 E2B baked into the image.
+- The server runs with `--offline`, and its NetworkPolicy gives it no
+  egress at all.
+- Only the worker can reach it, through the `llm` Service.
+- Its output is constrained by a JSON schema to one of three labels.
+- On 4 CPU cores it takes about 2.5 s per post, and it uses 3.5 GiB of
+  memory.
+
 **Data model (migration `0001`, D16).** All tables are owned by `migrator`;
 the application roles only get what their zone needs:
 
@@ -138,11 +147,16 @@ PASS  api       analysis   tcp postgres.data.svc:5432                 expected o
 PASS  worker    analysis   tcp postgres.data.svc:5432                 expected open
 PASS  llm       analysis   tcp postgres.data.svc:5432                 expected blocked
 PASS  outsider  default    tcp postgres.data.svc:5432                 expected blocked
+PASS  worker    analysis   tcp llm.analysis.svc:8080                  expected open
+PASS  api       analysis   tcp llm.analysis.svc:8080                  expected blocked
+PASS  ingestor  ingest     tcp llm.analysis.svc:8080                  expected blocked
+PASS  outsider  default    tcp llm.analysis.svc:8080                  expected blocked
 ```
 
-The last line comes from a pod outside the three zones, whose own egress is
-open. It is blocked by the database's ingress rule, so both ends are
-enforced. *Checks against the LLM (step 7): TBD.*
+The outsider pod sits outside the three zones, and its own egress is open.
+Its connections are blocked by the database's and the LLM's own ingress
+rules, so both ends of every connection are enforced. The API is in the
+same zone as the LLM and still cannot reach it.
 
 **Least privilege in the database (D1, D13).**
 - Three login roles:
@@ -208,6 +222,16 @@ Granting the ingestor one extra privilege makes the run fail (tested).
 - Scaling means CloudNativePG: a primary plus streaming replicas, automatic
   failover, and a Service that always points to the primary. The
   applications would not change, since they connect by Service name.
+
+**LLM: one pod, on purpose (D23).**
+- Only the batch worker uses it, and while it is down the summaries are
+  still served, with their last update time (A3).
+- It runs as 1 replica with `strategy: Recreate`. A rolling update would
+  run two pods of about 4 GiB side by side, which a small node cannot
+  afford.
+- Its image is on every node, so if its node goes down it is rescheduled
+  elsewhere. Classification then pauses for about 40 s while the model
+  loads.
 
 *API replicas, probes, PDB and node drain: TBD (step 10).*
 
