@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "socialsignal-db.labels" . | nindent 4 }}
+data:
+  # Run by the image's entrypoint only when the data directory is empty,
+  # i.e. on the very first start. It creates the least-privilege login roles
+  # and the application database, owned by the migrator. Tables and grants
+  # come from the migrations (step 4b). Passwords are read from the mounted
+  # Secret with psql's backquote expansion, so they never appear in a
+  # command line.
+  10-roles.sql: |
+    \set migrator_pw `cat /run/secrets/postgres/migrator-password`
+    \set ingestor_pw `cat /run/secrets/postgres/ingestor-password`
+    \set analysis_pw `cat /run/secrets/postgres/analysis-password`
+
+    CREATE ROLE migrator LOGIN PASSWORD :'migrator_pw';
+    CREATE ROLE ingestor LOGIN PASSWORD :'ingestor_pw';
+    CREATE ROLE analysis LOGIN PASSWORD :'analysis_pw';
+
+    CREATE DATABASE {{ .Values.database }} OWNER migrator;
+    REVOKE ALL ON DATABASE {{ .Values.database }} FROM PUBLIC;
+    GRANT CONNECT ON DATABASE {{ .Values.database }} TO ingestor, analysis;

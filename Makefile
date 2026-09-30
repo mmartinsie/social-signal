@@ -15,9 +15,10 @@ K3D_HELPER_TAG  := 5.9.0
 K3D_PROXY_IMAGE := ghcr.io/k3d-io/k3d-proxy:$(K3D_HELPER_TAG)
 K3D_TOOLS_IMAGE := ghcr.io/k3d-io/k3d-tools:$(K3D_HELPER_TAG)
 CURL_IMAGE      := curlimages/curl:8.22.0
+POSTGRES_IMAGE  := postgres:18.6-alpine3.23
 
 NODE_IMAGES     := $(K3S_IMAGE) $(K3D_PROXY_IMAGE) $(K3D_TOOLS_IMAGE)
-WORKLOAD_IMAGES := $(CURL_IMAGE)
+WORKLOAD_IMAGES := $(CURL_IMAGE) $(POSTGRES_IMAGE)
 
 IMAGES_DIR      := dist/images
 # Empty means the Docker host's architecture; override with ARCH=amd64|arm64.
@@ -28,10 +29,15 @@ KUBE_CONTEXT    := k3d-$(CLUSTER)
 K3D_CONFIG      := deploy/k3d/cluster.yaml
 PLATFORM_DIR    := deploy/platform
 
-HELM_RELEASE    := socialsignal
-HELM_CHART      := deploy/helm/socialsignal
+# Two Helm releases with separate lifecycles (D2): the database first, so the
+# application's migration hook always finds it.
+DB_RELEASE      := socialsignal-db
+DB_CHART        := deploy/helm/socialsignal-db
+DB_NAMESPACE    := data
+APP_RELEASE     := socialsignal
+APP_CHART       := deploy/helm/socialsignal
 # Only the release metadata lives here; every resource sets its own namespace.
-HELM_NAMESPACE  := default
+APP_NAMESPACE   := default
 
 # Everything the scripts need, passed explicitly as environment variables.
 SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
@@ -54,8 +60,11 @@ images: ## Download every third-party image into the offline bundle
 
 start: ## Start the local cluster from the offline bundle and deploy the system
 	@$(SCRIPT_ENV) sh scripts/cluster-up.sh
-	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
-	  --kube-context $(KUBE_CONTEXT) --namespace $(HELM_NAMESPACE) --wait --timeout 10m
+	@$(SCRIPT_ENV) sh scripts/db-secrets.sh
+	helm upgrade --install $(DB_RELEASE) $(DB_CHART) --set image=$(POSTGRES_IMAGE) \
+	  --kube-context $(KUBE_CONTEXT) --namespace $(DB_NAMESPACE) --wait --timeout 10m
+	helm upgrade --install $(APP_RELEASE) $(APP_CHART) \
+	  --kube-context $(KUBE_CONTEXT) --namespace $(APP_NAMESPACE) --wait --timeout 10m
 
 stop: ## Stop the local cluster, keeping its state
 	k3d cluster stop $(CLUSTER)

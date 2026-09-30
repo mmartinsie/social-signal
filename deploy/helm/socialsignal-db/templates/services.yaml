@@ -1,0 +1,33 @@
+# Clients connect to postgres.<namespace>.svc: a stable name, so replacing
+# this StatefulSet (e.g. with CloudNativePG) needs no change in the apps.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "socialsignal-db.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "socialsignal-db.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+# Headless Service that gives the StatefulSet pod its stable network identity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "socialsignal-db.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "socialsignal-db.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

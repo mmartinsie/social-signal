@@ -53,9 +53,17 @@ make start
 Starts a local k3d cluster called `socialsignal` (1 server and 2 agents)
 from the offline bundle only; it fails and asks for `make build` if the
 bundle is missing. The cluster is configured so it cannot pull images from
-any registry. `make start` then creates the namespaces `ingest`, `data` and
-`analysis` with a default-deny NetworkPolicy in each. Running it again is
-safe: it creates, starts or leaves the cluster as needed.
+any registry. `make start` then:
+
+1. creates the namespaces `ingest`, `data` and `analysis`, with a
+   default-deny NetworkPolicy in each;
+2. generates random database passwords as Kubernetes Secrets, one per zone,
+   so each zone only holds its own;
+3. installs two Helm releases: `socialsignal-db` (PostgreSQL, in `data`),
+   then `socialsignal` (the application).
+
+Running it again is safe: it creates, starts or leaves each piece as needed,
+and keeps existing passwords.
 
 The first start takes a few minutes while k3s imports its system images
 (about 4.5 minutes on an HDD); later starts are faster.
@@ -73,17 +81,20 @@ make verify-boundary
 ```
 
 Proves the security boundary against the real NetworkPolicies, in about
-20 seconds. It starts a temporary curl pod with the labels of each component
-(ingestor, API, worker, LLM), so the same policies apply to it as to the
-real pods. It then checks that:
+40 seconds (16 checks). It starts a temporary curl pod with the labels of
+each component (ingestor, API, worker, LLM), so the same policies apply to it
+as to the real pods, plus an "outsider" pod in `default`. It then checks
+that:
 
 - the ingestor reaches Bluesky and a public IP, but not the Kubernetes API
   (private ranges are excluded);
 - the API and the worker resolve names but cannot connect to the internet;
-- the LLM cannot even resolve names.
+- the LLM cannot even resolve names;
+- PostgreSQL is reachable from the ingestor, the API and the worker, but
+  not from the LLM or from the outsider pod.
 
 It prints a PASS/FAIL table, deletes the pods, and exits non-zero if any
-check fails. *Checks against PostgreSQL and the LLM: TBD.*
+check fails. *Checks against the LLM: TBD.*
 
 ## Stop and clean up
 
@@ -120,6 +131,7 @@ Inside `deploy/`:
 
 - `k3d/`: the cluster configuration.
 - `platform/`: the namespaces and default-deny policies.
+- `helm/socialsignal-db/`: PostgreSQL (its own release, installed first).
 - `helm/socialsignal/`: the application chart (for now, the per-component
   NetworkPolicies).
 

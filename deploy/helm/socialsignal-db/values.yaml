@@ -1,0 +1,28 @@
+# PostgreSQL image. Set by the Makefile (POSTGRES_IMAGE) so the version lives
+# in one place and always matches the offline bundle.
+image: ""
+
+# Database created on first start, owned by the migrator role.
+database: socialsignal
+
+# Secret created by `make start` (scripts/db-secrets.sh), never by Helm (D13).
+# Keys: postgres-password, migrator-password, ingestor-password,
+# analysis-password.
+credentialsSecret: postgres-credentials
+
+storage:
+  size: 1Gi
+  # Empty means the cluster's default StorageClass (local-path in k3s).
+  storageClassName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Zones allowed to connect (NetworkPolicy); must match deploy/platform.
+namespaces:
+  ingest: ingest
+  analysis: analysis

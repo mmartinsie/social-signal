@@ -2,7 +2,8 @@
 Per-component allow rules on top of the platform's default-deny (A5, D7).
 Pods are selected by app.kubernetes.io/component. With both directions
 denied by default, a connection needs an egress rule on the client AND an
-ingress rule on the server; the pairs below always come together.
+ingress rule on the server; the pairs below always come together (the
+PostgreSQL side is in the socialsignal-db chart).
 */ -}}
 {{- $ns := .Values.namespaces }}
 # ---------------------------------------------------------------- analysis
@@ -110,43 +111,9 @@ spec:
         {{- end }}
 ---
 # -------------------------------------------------------------------- data
-# PostgreSQL: the only bridge between zones; no egress.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: postgres
-  namespace: {{ $ns.data }}
-  labels:
-    {{- include "socialsignal.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/component: postgres
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $ns.ingest }}
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/component: ingestor
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $ns.analysis }}
-          podSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/component
-                operator: In
-                values: [api, worker]
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/component: migrator
-      ports:
-        - protocol: TCP
-          port: {{ .Values.ports.postgres }}
----
-# Migration Job (Alembic, step 4): talks only to PostgreSQL.
+# The PostgreSQL ingress rule lives with the database, in the socialsignal-db
+# chart (policy postgres-clients).
+# Migration Job (Alembic, step 4b): talks only to PostgreSQL.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

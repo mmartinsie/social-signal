@@ -1,0 +1,99 @@
+# A single PostgreSQL instance (A7, D14): any restart or upgrade means a short
+# outage. Scaling out is CloudNativePG (open item), not more replicas here:
+# plain replicas of this StatefulSet would be independent databases.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "socialsignal-db.labels" . | nindent 4 }}
+    {{- include "socialsignal-db.selectorLabels" . | nindent 4 }}
+spec:
+  serviceName: postgres-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "socialsignal-db.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "socialsignal-db.labels" . | nindent 8 }}
+        {{- include "socialsignal-db.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pod if the init script changes (it only matters on a new
+        # volume, but keeps the running pod consistent with the chart).
+        checksum/initdb: {{ include (print $.Template.BasePath "/configmap-initdb.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # uid/gid 70 is the postgres user of the Alpine image.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ required "image is required (set by the Makefile)" .Values.image }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD_FILE
+              value: /run/secrets/postgres/postgres-password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          startupProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -h, 127.0.0.1, -p, "5432"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -h, 127.0.0.1, -p, "5432"]
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, postgres, -h, 127.0.0.1, -p, "5432"]
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            # PostgreSQL 18+ images keep PGDATA in /var/lib/postgresql/18/docker
+            # and declare the volume one level up.
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            - name: credentials
+              mountPath: /run/secrets/postgres
+              readOnly: true
+      volumes:
+        - name: initdb
+          configMap:
+            name: postgres-initdb
+        - name: credentials
+          secret:
+            secretName: {{ .Values.credentialsSecret }}
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "socialsignal-db.labels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.storage.size }}

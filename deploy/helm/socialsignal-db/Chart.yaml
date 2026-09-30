@@ -1,0 +1,10 @@
+apiVersion: v2
+name: socialsignal-db
+description: >-
+  PostgreSQL for SocialSignal, the only bridge between the ingest and analysis
+  zones. A release of its own, installed before the application chart, so the
+  application's migration hook always finds the database, and upgrading or
+  uninstalling the application never touches the data (D1, D2).
+type: application
+version: 0.1.0
+appVersion: "18.6"

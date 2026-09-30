@@ -1,13 +1,15 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 3c)._
+_Last updated: 2026-09-30 (step 4a)._
 
 ## Current step
 
-**Step 3c: per-component allow rules (Helm chart) and
-`make verify-boundary`.** Done.
+**Step 4a: PostgreSQL release, roles, credentials and network checks.**
+Done.
 
-Next: **step 4**: PostgreSQL in `data`, with schema, migrations and roles.
+Next: **step 4b**: the Python image pipeline (Dockerfile with uv), the
+Alembic migrations member, the migration Job as a Helm hook, the initial
+schema with per-role grants, and database privilege checks.
 
 ## Steps
 
@@ -19,7 +21,8 @@ Next: **step 4**: PostgreSQL in `data`, with schema, migrations and roles.
 | 3a | Offline image bundle (`make build` downloads all third-party images) | Done (2026-09-30) |
 | 3b | k3d cluster from the bundle, namespaces and default-deny (`make start/stop/clean/distclean`) | Done (2026-09-30) |
 | 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Done (2026-09-30) |
-| 4 | PostgreSQL: schema, migrations and roles | Pending |
+| 4a | PostgreSQL in its own release, login roles, per-zone credentials, network checks | Done (2026-09-30) |
+| 4b | Python image pipeline, Alembic migrations (Helm hook), schema and grants | Pending |
 | 5 | Handle ingestor, end to end into PostgreSQL | Pending |
 | 6 | Hashtag ingestor with authentication | Pending |
 | 7 | Offline LLM server and classification smoke test | Pending |
@@ -33,9 +36,16 @@ Next: **step 4**: PostgreSQL in `data`, with schema, migrations and roles.
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 4: decide where the Alembic migrations live.
-- Step 4: add PostgreSQL checks to `verify-boundary`: api and worker reach
-  it; llm does not; ingestor does.
+- Step 4b:
+  - Alembic lives in a new workspace member, `services/migrations`, and
+    runs as a `pre-install/pre-upgrade` Job in `data` using
+    `data/db-migrator`.
+  - The first own image needs a tag that changes on every build (D4); the
+    tag must reach `make start`.
+  - Add database privilege checks: `ingestor` cannot read `summaries`;
+    `analysis` cannot write `posts`.
+  - A test must connect over the network, never via `127.0.0.1`, which the
+    official image trusts without a password (D14).
 - Steps 5 and 9: pods must carry `app.kubernetes.io/component`, and Services
   must also select `app.kubernetes.io/instance`, so that the
   `verify-boundary` test pods never receive traffic (D12).
@@ -45,6 +55,9 @@ Next: **step 4**: PostgreSQL in `data`, with schema, migrations and roles.
   importing it only where the LLM runs. Add the LLM checks to
   `verify-boundary`: the worker reaches it, the API does not.
 - Step 8: decide the tie-break rule for the dominant label (A3).
+- Step 10: the `local-path` volume pins PostgreSQL to one node. For the
+  drain demo, drain a node that does *not* host `postgres-0`, or explain the
+  outage (D14).
 
 ## How to resume
 
@@ -68,4 +81,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 | Date | Steps | Time | Notes |
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
-| 2026-09-30 | 2-3c | *TBD* | Session 2 (WSL) |
+| 2026-09-30 | 2-4a | *TBD* | Session 2 (WSL) |

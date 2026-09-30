@@ -76,7 +76,7 @@ baseline, each component gets only what it needs, selected by its
 | Worker (`analysis`) | nothing | PostgreSQL, DNS, LLM |
 | LLM (`analysis`) | worker only, port 8080 | nothing |
 | Ingestor (`ingest`) | nothing | internet on TCP 443 only, excluding private and link-local ranges; PostgreSQL; DNS |
-| PostgreSQL (`data`) | ingestor, API, worker, migration Job (5432) | nothing |
+| PostgreSQL (`data`, database chart) | ingestor, API, worker, migration Job (5432) | nothing |
 | Migration Job (`data`) | nothing | PostgreSQL, DNS |
 
 DNS egress is allowed only towards the CoreDNS pods, and no IP is
@@ -97,17 +97,66 @@ PASS  api       analysis   https://1.1.1.1                            expected b
 PASS  worker    analysis   (same as api)
 PASS  llm       analysis   dns public.api.bsky.app                    expected no-dns
 PASS  llm       analysis   https://1.1.1.1                            expected blocked
+PASS  ingestor  ingest     tcp postgres.data.svc:5432                 expected open
+PASS  api       analysis   tcp postgres.data.svc:5432                 expected open
+PASS  worker    analysis   tcp postgres.data.svc:5432                 expected open
+PASS  llm       analysis   tcp postgres.data.svc:5432                 expected blocked
+PASS  outsider  default    tcp postgres.data.svc:5432                 expected blocked
 ```
 
-*Checks against PostgreSQL (step 4) and the LLM (step 7): TBD.*
+The last line comes from a pod outside the three zones, whose own egress is
+open. It is blocked by the database's ingress rule, so both ends are
+enforced. *Checks against the LLM (step 7): TBD.*
+
+**Least privilege in the database (D1, D13).**
+- Three login roles:
+  - `migrator` owns the database and is the only one with DDL;
+  - `ingestor` and `analysis` get `CONNECT` plus per-table grants
+    (step 4b).
+- None of them is superuser or can create roles or databases.
+- Their passwords are random and generated on the cluster by `make start`,
+  never by Helm, the repository or the bundle. Each zone only holds its own
+  (`ingest` has only the ingestor's).
+- Every network client must authenticate with SCRAM-SHA-256.
 
 ## 6. High availability
 
-*TBD (step 10).*
+**PostgreSQL: one pod, on purpose (D14).**
+- The database is a single-replica StatefulSet with a persistent volume.
+  Today any restart or upgrade is an outage. Recreating the pod took about
+  6 s, with its data intact; meanwhile the API cannot read and the CronJobs
+  retry on their next run.
+- Adding replicas to this StatefulSet would create independent databases,
+  not replicas.
+- Scaling means CloudNativePG: a primary plus streaming replicas, automatic
+  failover, and a Service that always points to the primary. The
+  applications would not change, since they connect by Service name.
+
+*API replicas, probes, PDB and node drain: TBD (step 10).*
 
 ## 7. Continuous updates
 
-*TBD (step 10).*
+**Separate releases for data and applications (D2).** PostgreSQL is its own
+Helm release (`socialsignal-db`), installed before the application. The
+application's schema migration runs as a `pre-install`/`pre-upgrade` hook,
+which Helm executes before creating resources, so the database must already
+exist. Upgrading or uninstalling the application never touches the data, and
+upgrading PostgreSQL does not touch the application.
+
+**Upgrading PostgreSQL (documented, not implemented; D14).**
+- *Minor* (18.6 → 18.7): the on-disk format is the same. Change
+  `POSTGRES_IMAGE`, then run `make build` and `make start`. Only the database
+  pod restarts, with a short outage.
+- *Major* (18 → 19): the data directory must be converted, with one of:
+  - `pg_upgrade --link` in a Job with both versions' binaries (minutes of
+    outage);
+  - dump and restore into a new StatefulSet (offline blue/green);
+  - logical replication (online blue/green, near-zero outage, most complex).
+
+With CloudNativePG, minor upgrades become a rolling update plus a
+switchover, with near-zero outage.
+
+*Application rolling updates: TBD (step 10).*
 
 ## 8. Delivery to isolated environments
 
@@ -138,7 +187,16 @@ same tarballs would be pushed there instead. See
 ## 11. Open items
 
 - **Highly available PostgreSQL:** replace the single instance with the
-  CloudNativePG operator (replication and failover).
+  CloudNativePG operator: replication, failover, and near-zero-outage minor
+  upgrades (D14).
+- **PostgreSQL major upgrades:** automate one of the documented paths
+  (`pg_upgrade` Job, dump/restore or logical replication).
+- **Secrets at rest:** enable k3s `--secrets-encryption`, one line in
+  `deploy/k3d/cluster.yaml`, applied when the cluster is created. Today
+  Secrets are only base64-encoded in the datastore.
+- **External secret manager:** Vault, External Secrets Operator, Sealed
+  Secrets or SOPS, for rotation and audit of the database and Bluesky
+  credentials (D13).
 - **Users and authentication:** login (e.g. OIDC at the ingress) and
   per-analyst subscription lists.
 - **DNS tunnelling:** the analysis zone may query the cluster DNS, which
