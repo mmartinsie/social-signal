@@ -4,8 +4,8 @@ _Last updated: 2026-09-30 (step 2)._
 
 ## Current step
 
-**Step 3: k3d cluster, namespaces, default-deny NetworkPolicies, test pods and
-`make verify-boundary`.** Being proposed; not started.
+**Step 3b: start the k3d cluster from the bundle, then apply the namespaces
+and the default-deny policies.** Being proposed; not started.
 
 ## Steps
 
@@ -14,7 +14,9 @@ _Last updated: 2026-09-30 (step 2)._
 | 0 | Read the brief; requirements, ambiguities and plan | Done (2026-09-30) |
 | 1 | Prerequisites | Done (2026-09-30) |
 | 2 | Repository skeleton | Done (2026-09-30) |
-| 3 | k3d cluster, namespaces, NetworkPolicies, `make verify-boundary` | Pending |
+| 3a | Offline image bundle (`make build` downloads all third-party images) | Done (2026-09-30) |
+| 3b | k3d cluster from the bundle, namespaces and default-deny (`make start/stop/clean`) | Pending |
+| 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Pending |
 | 4 | PostgreSQL: schema, migrations and roles | Pending |
 | 5 | Handle ingestor, end to end into PostgreSQL | Pending |
 | 6 | Hashtag ingestor with authentication | Pending |
@@ -29,7 +31,12 @@ _Last updated: 2026-09-30 (step 2)._
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 3: choose between the k3d local registry and `k3d image import` (D4).
+- Step 3b: decide what `make clean` removes: the cluster and `dist/` (back to
+  a clean clone), or the cluster only, with a separate `distclean`.
+- Step 3b: verify that the `docker save` tarballs load with `docker load` and
+  `k3d image import`, and that no pod pulls an image.
+- Step 3c: decide whether the ingest zone's egress is limited to port 443 and
+  excludes private address ranges.
 - Step 4: decide where the Alembic migrations live.
 - Step 6: decide how hashtag credentials are provided (A6).
 - Step 8: decide the tie-break rule for the dominant label (A3).

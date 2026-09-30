@@ -289,12 +289,50 @@ decisions, **E** = development environment, **R** = repository layout.
   A single entry point lets the API policy accept ingress only from Traefik.
 - **Trade-off:** the API policy depends on Traefik's namespace and labels.
 
-### D4. Getting images into the cluster
+### D4. Getting images into the cluster: offline image bundle (step 3a)
 
-- **Decision:** **deferred to step 3**: the k3d local registry or
-  `k3d image import`.
-- **Constraint:** images are built locally inside `make build`, because the
-  reviewer may be on an ARM Mac.
+- **Decision:** `make build` downloads every third-party image, pinned to an
+  exact version, and saves it as a tarball under `dist/images/<arch>/`.
+  `make start` (step 3b) runs the cluster from that bundle only:
+  - `k3s/`: the k3s air-gap images (CoreDNS, Traefik, pause…), checked
+    against the release's official sha256 file and mounted into every node.
+    k3s imports them every time it starts.
+  - `node/`: the k3s node image and the k3d helper images, loaded with
+    `docker load`. k3d pulls an image only when it is missing locally, and
+    the helper images are pinned with `K3D_IMAGE_LOADBALANCER` /
+    `K3D_IMAGE_TOOLS`.
+  - `workload/`: images for our pods, imported into the nodes with
+    `k3d image import`.
+
+  At deploy time the only outbound traffic is the ingestor's access to
+  Bluesky. The application images built in later steps are added to the same
+  bundle.
+- **Alternatives:**
+  - Pull from public registries at deploy time: the simplest, but the site
+    needs Docker Hub and GHCR access.
+  - A local registry that images are pushed to: k3d-managed on the laptop, or
+    a Harbor-like registry on site.
+  - `k3d image import` straight from the local Docker cache, with no bundle
+    on disk: nothing to carry to another host.
+- **Why:**
+  - The deployment host needs no registry access, which is the on-prem /
+    air-gapped delivery story.
+  - Within the timebox, a directory of tarballs is simpler than running a
+    registry (the author's call).
+  - Every image is pinned, and the k3s tarball is checksum-verified.
+- **Trade-off:**
+  - `k3d image import` copies each image into all three nodes. For the
+    multi-GB LLM image this triples disk usage and import time.
+  - A rebuilt image has to be re-imported, so tags must change on every
+    build; never `latest`.
+  - The bundle is per architecture; use `ARCH=arm64` to build one for an ARM
+    host.
+  - `dist/` is not in the zip (hundreds of MB now, GBs with the LLM), so the
+    reviewer generates it with `make build`.
+  - Images are pinned by tag rather than digest, and the tarballs are not
+    signed (open item).
+  - On a site that has its own registry, the same tarballs would be pushed
+    there instead.
 
 ### D5. Bluesky endpoints and idempotent ingestion
 
@@ -312,9 +350,10 @@ decisions, **E** = development environment, **R** = repository layout.
 
 ### D6. Reviewer prerequisites
 
-- **Decision:** `docker`, `k3d`, `kubectl`, `helm` and `make`. `uv` is only
-  needed for local development: Python dependencies are installed inside the
-  Docker builds.
+- **Decision:** `docker`, `k3d`, `kubectl`, `helm` and `make`, plus `curl`
+  and `shasum`, which are preinstalled on macOS and most Linux distributions.
+  `uv` is only needed for local development: Python dependencies are
+  installed inside the Docker builds.
 - **Alternatives:** require a local Python and uv toolchain.
 - **Why:** fewer tools for the reviewer to install; builds match the
   reviewer's CPU architecture.
@@ -436,3 +475,9 @@ External facts the decisions above depend on.
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |
 | Installed tool versions (E3) | Local commands (`--version`) in WSL | 2026-09-30 |
 | uv 0.12.21 generates `uv_build>=0.12.21,<0.13.0` as build backend | `uv init --package` output | 2026-09-30 |
+| k3d pulls a node image only when it is missing locally | k3d v5.9.0 source, `pkg/runtimes/docker/container.go` | 2026-09-30 |
+| `K3D_IMAGE_LOADBALANCER` and `K3D_IMAGE_TOOLS` override the k3d helper images | k3d v5.9.0 source, `pkg/types/env.go` | 2026-09-30 |
+| k3s imports the image tarballs in `/var/lib/rancher/k3s/agent/images/` every time it starts | docs.k3s.io/installation/airgap | 2026-09-30 |
+| k3s `v1.36.4+k3s1` publishes air-gap image tarballs for amd64 and arm64 with sha256 files | GitHub release assets of k3s-io/k3s | 2026-09-30 |
+| `rancher/k3s:v1.36.4-k3s1`, `k3d-proxy`/`k3d-tools:5.9.0` and `curlimages/curl:8.22.0` are published for amd64 and arm64 | `docker buildx imagetools inspect` | 2026-09-30 |
+| Docker 29 (containerd image store) `docker save --platform` writes an OCI tarball with only that platform | Local test with `make build` | 2026-09-30 |

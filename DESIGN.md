@@ -69,7 +69,17 @@ Summarised here once implemented; the full record is in
 
 ## 8. Delivery to isolated environments
 
-*TBD.*
+`make build` is the only step that downloads images. It saves every
+third-party image, pinned to an exact version, as a tarball under
+`dist/images/<arch>/`, including the k3s system images, which are
+checksum-verified. `make start` runs the cluster from that bundle alone, so
+the deployment host needs no registry access. Its only outbound traffic is
+the ingestor reading Bluesky. The bundle can be built on a connected machine
+and carried to the target. On a site with its own registry (e.g. Harbor), the
+same tarballs would be pushed there instead. See
+[D4](docs/DECISIONS.md#d4-getting-images-into-the-cluster-offline-image-bundle-step-3a).
+
+*The rest is TBD.*
 
 ## 9. How AI agents were used
 
@@ -89,3 +99,6 @@ Summarised here once implemented; the full record is in
   forwards to upstream resolvers. That is a theoretical exfiltration channel;
   close it by restricting CoreDNS forwarding for that zone or with an
   internal-only resolver.
+- **Bundle integrity:** images are pinned by tag and only the k3s tarball is
+  checksum-verified. Pin every image by digest and ship a signed manifest of
+  the bundle.

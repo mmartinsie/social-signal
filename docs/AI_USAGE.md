@@ -111,3 +111,36 @@ memory is trimmed so it does not duplicate them.
   - the Makefile placeholders fail as intended. Only tested with GNU
     make 4.3; make 3.81 compatibility is by construction and has not been
     tested.
+
+### Step 3a: offline image bundle (session 2)
+
+- **Agent proposed** to do step 3 in two parts: the cluster with default-deny
+  first, then the allow rules and `verify-boundary`. It also proposed a local
+  k3d registry to get images into the cluster.
+- **Author decided:**
+  - split step 3;
+  - drop the registry: `make build` downloads the images into a local folder
+    and `make start` runs them from there, so the deployment host needs
+    access only to Bluesky, not to Docker Hub. For the timebox this is
+    better than a Harbor-like registry;
+  - namespaces and default-deny are applied with `kubectl apply`;
+  - `make start` must not switch the user's current kubectl context.
+- **Agent re-planned** step 3 into 3a (bundle), 3b (cluster from the bundle)
+  and 3c (allow rules and verification), because the bundle added work. It
+  then verified the external facts the design depends on (listed in
+  [`DECISIONS.md`](DECISIONS.md#5-verified-facts)):
+  - k3d pull behaviour, from its source;
+  - the k3d helper-image variables;
+  - k3s air-gap import;
+  - the release assets and checksums;
+  - multi-arch availability.
+- **Process note:** the agent took an ambiguous "yes" as approval and tried
+  to run `make build`. The author rejected that tool call, and the agent
+  asked for explicit approval before retrying.
+- **Verified:**
+  - `make build` produced a 319 MB bundle for amd64;
+  - the k3s tarball's sha256 matches the release file;
+  - a second run downloads nothing;
+  - every image tarball is an OCI archive holding only the requested
+    platform;
+  - the checksum comparison catches a truncated file.
