@@ -57,7 +57,16 @@ Summarised here once implemented; the full record is in
 
 ## 5. Security boundary
 
-*TBD (step 3).*
+**Baseline (platform layer, step 3b).** `make start` creates one namespace
+per zone (`ingest`, `data`, `analysis`) and a `default-deny-all`
+NetworkPolicy in each one, denying all ingress and all egress, DNS included.
+k3s enforces it with its embedded kube-router controller. A test pod in
+`analysis` cannot even resolve `public.api.bsky.app`, while the same pod in
+`default`, which has no policy, gets HTTP 200. These manifests live outside
+the Helm release (D7), so uninstalling the application never removes the
+baseline or a namespace.
+
+*Per-component allow rules and `make verify-boundary`: TBD (step 3c).*
 
 ## 6. High availability
 
@@ -75,7 +84,11 @@ third-party image, pinned to an exact version, as a tarball under
 checksum-verified. `make start` runs the cluster from that bundle alone, so
 the deployment host needs no registry access. Its only outbound traffic is
 the ingestor reading Bluesky. The bundle can be built on a connected machine
-and carried to the target. On a site with its own registry (e.g. Harbor), the
+and carried to the target. The cluster is also configured so it *cannot*
+pull: every registry is mirrored to an unresolvable address and k3s'
+fallback to the real registry is disabled (D9). A connected laptop therefore
+behaves like an isolated site, and an image missing from the bundle fails
+visibly instead of being downloaded. On a site with its own registry (e.g. Harbor), the
 same tarballs would be pushed there instead. See
 [D4](docs/DECISIONS.md#d4-getting-images-into-the-cluster-offline-image-bundle-step-3a).
 

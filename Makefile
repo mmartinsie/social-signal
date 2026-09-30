@@ -23,11 +23,24 @@ IMAGES_DIR      := dist/images
 # Empty means the Docker host's architecture; override with ARCH=amd64|arm64.
 ARCH            ?=
 
+CLUSTER         := socialsignal
+KUBE_CONTEXT    := k3d-$(CLUSTER)
+K3D_CONFIG      := deploy/k3d/cluster.yaml
+PLATFORM_DIR    := deploy/platform
+
+# Everything the scripts need, passed explicitly as environment variables.
+SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
+  K3D_PROXY_IMAGE='$(K3D_PROXY_IMAGE)' K3D_TOOLS_IMAGE='$(K3D_TOOLS_IMAGE)' \
+  NODE_IMAGES='$(NODE_IMAGES)' WORKLOAD_IMAGES='$(WORKLOAD_IMAGES)' \
+  IMAGES_DIR='$(IMAGES_DIR)' ARCH='$(ARCH)' \
+  CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' \
+  K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)'
+
 # Targets are implemented step by step. Until then they fail loudly so that a
 # placeholder is never mistaken for a working step. $(1) = planned step.
 not_implemented = echo "make $@: not implemented yet (planned in step $(1), see docs/PROGRESS.md)" >&2; exit 1
 
-.PHONY: help build images start stop clean verify-boundary
+.PHONY: help build images start stop clean distclean verify-boundary
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -35,18 +48,19 @@ help: ## List the available targets
 build: images ## Install dependencies and build all container images
 
 images: ## Download every third-party image into the offline bundle
-	@K3S_VERSION='$(K3S_VERSION)' NODE_IMAGES='$(NODE_IMAGES)' \
-	  WORKLOAD_IMAGES='$(WORKLOAD_IMAGES)' IMAGES_DIR='$(IMAGES_DIR)' ARCH='$(ARCH)' \
-	  sh scripts/bundle-images.sh
+	@$(SCRIPT_ENV) sh scripts/bundle-images.sh
 
-start: ## Create the local cluster and deploy the system
-	@$(call not_implemented,3)
+start: ## Start the local cluster from the offline bundle and deploy the system
+	@$(SCRIPT_ENV) sh scripts/cluster-up.sh
 
-stop: ## Stop the running system
-	@$(call not_implemented,3)
+stop: ## Stop the local cluster, keeping its state
+	k3d cluster stop $(CLUSTER)
 
-clean: ## Remove the local cluster and build artefacts
-	@$(call not_implemented,3)
+clean: ## Delete the local cluster (the image bundle in dist/ is kept)
+	k3d cluster delete $(CLUSTER)
+
+distclean: clean ## Delete the local cluster and the image bundle
+	rm -rf dist
 
 verify-boundary: ## Prove that the analysis zone cannot reach the internet
 	@$(call not_implemented,3)

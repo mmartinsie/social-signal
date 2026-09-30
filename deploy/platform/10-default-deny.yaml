@@ -1,0 +1,30 @@
+# Baseline for every zone: deny all ingress and all egress, DNS included.
+# Each component only gets the traffic that its own NetworkPolicy allows
+# (Helm chart, step 3c). With both directions denied, a connection needs an
+# egress rule on the client AND an ingress rule on the server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ingest
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: data
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: analysis
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]

@@ -21,21 +21,11 @@
 # POSIX sh on purpose: it must run with both Linux and macOS userland.
 
 set -eu
+. "$(dirname "$0")/lib.sh"
 
 : "${K3S_VERSION:?}" "${NODE_IMAGES:?}" "${WORKLOAD_IMAGES:?}" "${IMAGES_DIR:?}"
 
-if [ -z "${ARCH:-}" ]; then
-  case "$(docker info --format '{{.Architecture}}')" in
-    x86_64 | amd64) ARCH=amd64 ;;
-    aarch64 | arm64) ARCH=arm64 ;;
-    *) echo "unsupported Docker architecture; set ARCH=amd64 or ARCH=arm64" >&2; exit 1 ;;
-  esac
-fi
-case "$ARCH" in
-  amd64 | arm64) ;;
-  *) echo "ARCH must be amd64 or arm64, got '$ARCH'" >&2; exit 1 ;;
-esac
-
+ARCH=$(detect_arch)
 bundle="$IMAGES_DIR/$ARCH"
 echo "Offline image bundle for linux/$ARCH in $bundle"
 
@@ -74,7 +64,7 @@ save_images() { # $1 = subdirectory, remaining arguments = image references
   shift
   mkdir -p "$dir"
   for image in "$@"; do
-    file="$dir/$(printf '%s' "$image" | tr '/:' '__').tar"
+    file=$(image_tarball "$dir" "$image")
     if [ -f "$file" ]; then
       echo "ok    $image (already saved)"
       continue

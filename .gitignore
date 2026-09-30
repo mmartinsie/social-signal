@@ -28,3 +28,6 @@ dist/
 
 # Claude Code per-user settings (CLAUDE.md itself is versioned on purpose)
 .claude/settings.local.json
+
+# The author's personal study notes; not part of the submission
+readme_personal.md

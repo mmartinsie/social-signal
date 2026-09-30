@@ -1,0 +1,24 @@
+# Platform layer: one namespace per network zone. Applied with `kubectl apply`
+# by `make start`, outside the Helm release, so uninstalling the application
+# can never delete a namespace or the PostgreSQL volume inside it (D7).
+# Files in this directory are applied in name order: namespaces first.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingest
+  labels:
+    app.kubernetes.io/part-of: socialsignal
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    app.kubernetes.io/part-of: socialsignal
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: analysis
+  labels:
+    app.kubernetes.io/part-of: socialsignal

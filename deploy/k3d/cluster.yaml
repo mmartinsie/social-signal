@@ -1,0 +1,46 @@
+# Local k3d cluster: 1 server and 2 agents, so replicas can be spread and a
+# node drained. The cluster name, the k3s image and the mount of the offline
+# image bundle are passed by scripts/cluster-up.sh, so versions live only in
+# the Makefile and the bundle path can depend on the CPU architecture.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+servers: 1
+agents: 2
+kubeAPI:
+  hostIP: "127.0.0.1"
+  hostPort: "6445"
+ports:
+  # Traefik, the only entry point for analysts. Bound to localhost only.
+  # Not 8080: kubectl without a context falls back to localhost:8080.
+  - port: 127.0.0.1:8088:80
+    nodeFilters:
+      - loadbalancer
+registries:
+  # The cluster can never pull an image, even when the host is online: every
+  # registry is mirrored to a name that cannot resolve (.invalid, RFC 2606)
+  # and the fallback to the real registry is disabled below. Images come only
+  # from the offline bundle (D4). The fallback is only disabled for
+  # registries listed here, hence the explicit entries next to "*".
+  config: |
+    mirrors:
+      "*":
+        endpoint: ["https://offline.invalid"]
+      docker.io:
+        endpoint: ["https://offline.invalid"]
+      ghcr.io:
+        endpoint: ["https://offline.invalid"]
+options:
+  k3s:
+    extraArgs:
+      - arg: --disable-default-registry-endpoint
+        nodeFilters:
+          - server:*
+          - agent:*
+  k3d:
+    wait: true
+    timeout: "300s"
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    # Never change the user's current context; the scripts always pass
+    # --context k3d-socialsignal explicitly.
+    switchCurrentContext: false

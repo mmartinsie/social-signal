@@ -182,7 +182,8 @@ decisions, **E** = development environment, **R** = repository layout.
     CloudNativePG gives failover but adds an operator and CRDs to install.
 - **Trade-off:** the single PostgreSQL instance is a single point of failure:
   the API tier is highly available, the database is not. The k3d "nodes" are
-  containers on one host, so node failure is only simulated.
+  containers on one host, so node failure is only simulated. Their IPs can
+  change on restart (see D11).
 
 ### A8. How ingestion and summarisation are scheduled
 
@@ -320,6 +321,8 @@ decisions, **E** = development environment, **R** = repository layout.
   - Within the timebox, a directory of tarballs is simpler than running a
     registry (the author's call).
   - Every image is pinned, and the k3s tarball is checksum-verified.
+  - The cluster is also configured so it *cannot* pull (D9), which makes the
+    guarantee checkable on a connected laptop.
 - **Trade-off:**
   - `k3d image import` copies each image into all three nodes. For the
     multi-GB LLM image this triples disk usage and import time.
@@ -359,6 +362,100 @@ decisions, **E** = development environment, **R** = repository layout.
   reviewer's CPU architecture.
 - **Trade-off:** slower builds, which Docker layer caching mitigates.
 
+### D7. Platform layer outside the Helm release (step 3b)
+
+- **Decision:** `make start` creates the namespaces (`ingest`, `data`,
+  `analysis`) and a `default-deny-all` NetworkPolicy in each of them with
+  `kubectl apply -f deploy/platform/`. The Helm chart (step 3c on) only holds
+  the per-component allow rules and the workloads.
+- **Alternatives:** create the namespaces and the default-deny policies from
+  the chart itself.
+- **Why:**
+  - `helm uninstall` can never delete a namespace, and with it the PostgreSQL
+    volume; Helm handles namespaces it owns awkwardly.
+  - The security baseline exists before any workload is deployed.
+  - It mirrors a real split: a platform team owns namespaces and baseline
+    policies, the application team owns the chart.
+- **Trade-off:** two mechanisms (kubectl and Helm) instead of one. The
+  default-deny policies are not versioned with the chart.
+
+### D8. Local cluster access: localhost only, context untouched (step 3b)
+
+- **Decision:**
+  - The Kubernetes API listens on `127.0.0.1:6445` and Traefik on
+    `127.0.0.1:8088`, so nothing is exposed to the host's network.
+  - k3d is told not to switch the current kubectl context
+    (`switchCurrentContext: false`), and every script passes
+    `--context k3d-socialsignal`.
+  - Traefik is not on 8080: kubectl with no context falls back to
+    `localhost:8080`, and it would then talk to Traefik and produce confusing
+    errors. The author found this by running `kubectl` before the cluster
+    existed.
+- **Why:** the reviewer's machine may have other clusters and contexts, and
+  running the demo must not change them.
+- **Trade-off:** to use kubectl by hand you pass `--context` or switch
+  explicitly. k3d still sets the context when the kubeconfig has no current
+  context at all (verified in its source), which overwrites nothing.
+
+### D9. The cluster cannot pull images (step 3b)
+
+- **Decision:** every registry is mirrored to `https://offline.invalid` in
+  k3s' `registries.yaml`: the wildcard `*` plus explicit `docker.io` and
+  `ghcr.io` entries. k3s runs with `--disable-default-registry-endpoint`, so
+  containerd cannot fall back to the real registry. Images come only from the
+  offline bundle (D4).
+- **Context:** the first `make start` showed that k3s imports the air-gap
+  tarball *asynchronously*, which took about 3.5 minutes per node on this
+  HDD. The kubelet started the system pods before the import finished and
+  silently pulled their images from Docker Hub. Offline, those pods would
+  just have waited, but on a connected host the "no downloads" promise
+  could not be proven.
+- **Alternatives:** accept and document the silent pulls on connected hosts.
+- **Why:**
+  - The promise is enforced by the infrastructure rather than hoped for,
+    like the network boundary.
+  - A connected laptop now behaves exactly like an isolated site.
+  - An image missing from the bundle fails visibly (`ErrImagePull`) instead
+    of being fetched.
+- **Trade-off:**
+  - On first creation the system pods wait for the import, so `make start`
+    takes about 4.5 minutes on this HDD.
+  - k3s re-imports the tarball on every start. That costs time but does not
+    block, because the images are already in containerd.
+  - Adding an image means adding it to the bundle; there is no escape hatch.
+- **Verified:** after creation there are 0 `Successfully pulled` events and
+  every `Pulled` event reads "already present on machine". Test pods with
+  `docker.io/library/busybox:1.36` (explicit mirror) and
+  `registry.k8s.io/pause:3.10` (wildcard only) both end in `ImagePullBackOff`
+  against `offline.invalid`.
+
+### D10. `make clean` keeps the image bundle (step 3b)
+
+- **Decision:** `make clean` deletes the cluster only; `make distclean` also
+  deletes `dist/`.
+- **Alternatives:** `make clean` deletes everything.
+- **Why:** on an isolated host the bundle cannot be downloaded again, so the
+  everyday cleanup must not destroy it. The bundle will also reach several
+  GB once the LLM image is added.
+- **Trade-off:** one more target to explain.
+
+### D11. `make start` waits for stable nodes before importing (step 3b)
+
+- **Decision:** before importing workload images, `scripts/cluster-up.sh`
+  waits until containerd answers on every node and every Node is `Ready`,
+  three checks in a row. After the import it checks that each image is on
+  every node.
+- **Context:** after `make stop` and `make start`, Docker can give an agent
+  a new IP. k3s then crash-loops ("network policy controller: failed to find
+  interface with specified node ip") for one or two minutes until the Node
+  object is updated. The first version of the script imported during that
+  window and failed. `k3d image import` only logs a per-node failure and
+  still exits 0 (verified in its source), which is why the script checks the
+  result itself.
+- **Alternatives:** static node IPs, which were not verified to be possible
+  with k3d.
+- **Trade-off:** a restart takes about 2 minutes on this machine.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -374,7 +471,9 @@ decisions, **E** = development environment, **R** = repository layout.
   - `sparseVhd` is deliberately **not** enabled because of its corruption
     risk.
 - **Trade-off:** 10 GB caps the cluster plus the LLM, so resource requests
-  must stay modest.
+  must stay modest. D: is an HDD, which makes image imports into the k3d
+  nodes slow (minutes per node for the k3s air-gap tarball); a reviewer on
+  an SSD will see much shorter start times.
 
 ### E2. Docker Engine inside WSL instead of Docker Desktop
 
@@ -481,3 +580,9 @@ External facts the decisions above depend on.
 | k3s `v1.36.4+k3s1` publishes air-gap image tarballs for amd64 and arm64 with sha256 files | GitHub release assets of k3s-io/k3s | 2026-09-30 |
 | `rancher/k3s:v1.36.4-k3s1`, `k3d-proxy`/`k3d-tools:5.9.0` and `curlimages/curl:8.22.0` are published for amd64 and arm64 | `docker buildx imagetools inspect` | 2026-09-30 |
 | Docker 29 (containerd image store) `docker save --platform` writes an OCI tarball with only that platform | Local test with `make build` | 2026-09-30 |
+| k3d switches the current context only when the kubeconfig has none, or when asked to | k3d v5.9.0 source, `pkg/client/kubeconfig.go` | 2026-09-30 |
+| `k3d image import` deletes only its own copy of a tarball; it logs a failed per-node import but exits 0 | k3d v5.9.0 source, `pkg/client/tools.go` | 2026-09-30 |
+| `--disable-default-registry-endpoint` only affects registries listed in `registries.yaml`; the flag exists for servers and agents in k3s v1.36.4 | docs.k3s.io/installation/private-registry; `k3s server/agent --help` | 2026-09-30 |
+| A wildcard `*` mirror counts as "listed": an image from `registry.k8s.io` is not pulled either | Local test (D9) | 2026-09-30 |
+| k3s imports the air-gap tarball asynchronously; pods can start (and pull) before it finishes | Local test: k3s logs vs. pod events | 2026-09-30 |
+| After `k3d cluster stop/start` an agent can get a new IP and crash-loop until the Node object is updated | Local test (D11) | 2026-09-30 |

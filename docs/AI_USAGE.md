@@ -35,8 +35,9 @@ short:
 - External facts (APIs, model availability, tool versions) are verified
   against documentation or with a real test, never assumed.
 - After each step the agent reports what changed, how to verify it, what
-  could go wrong, and likely questions about it. The questions stay in the
-  chat, never in the repository.
+  could go wrong, and likely questions about it. The questions are not part
+  of the repository: at the author's request they are also collected in a
+  personal, git-ignored study file (`readme_personal.md`).
 - On failure the agent explains the error and proposes one or two options
   instead of improvising large fixes.
 
@@ -144,3 +145,40 @@ memory is trimmed so it does not duplicate them.
   - every image tarball is an OCI archive holding only the requested
     platform;
   - the checksum comparison catches a truncated file.
+
+### Step 3b: cluster from the bundle, namespaces and default-deny (session 2)
+
+- **Agent proposed and built:**
+  - the k3d config;
+  - the platform manifests;
+  - `scripts/cluster-up.sh`;
+  - the `start`, `stop`, `clean` and `distclean` targets;
+  - a check after `k3d image import`, because its source showed that it
+    exits 0 even when a node fails.
+- **Author decided:**
+  - `make clean` keeps the bundle and `make distclean` removes it (D10);
+  - Traefik moves off port 8080;
+  - block all image pulls in the cluster;
+  - wait for stable nodes;
+  - the local copies of the images are removed from Docker before testing.
+    The author did this by hand, with the command the agent gave.
+- **Problems found by testing, not foreseen by the agent:**
+  - The author ran `kubectl` before the cluster existed and saw it fall back
+    to `localhost:8080`, the port the agent had planned for Traefik (D8).
+  - The first `make start` succeeded, but pod events showed that k3s had
+    pulled its system images from Docker Hub. The air-gap import is
+    asynchronous and slow on the author's HDD, so the offline promise was
+    not being met. The agent reported it instead of papering over it,
+    offered to enforce or to document, and the author chose to enforce (D9).
+  - `make stop` then `make start` failed: an agent node got a new IP and
+    crash-looped while the script was importing. The script's own
+    verification caught it, and the fix is to wait for stable nodes (D11).
+- **Verified:**
+  - `make start` from scratch takes about 4.5 minutes on the HDD;
+  - there are 0 `Successfully pulled` events; images from `docker.io` and
+    `registry.k8s.io` fail against `offline.invalid`;
+  - after `make stop`, `make start` succeeds in about 2 minutes despite a
+    node IP change;
+  - default-deny: `analysis` cannot resolve DNS, while `default` gets
+    HTTP 200;
+  - Traefik answers 404 on `127.0.0.1:8088`.
