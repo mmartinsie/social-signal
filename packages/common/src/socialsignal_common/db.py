@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import psycopg
+
 
 @dataclass(frozen=True)
 class DatabaseSettings:
@@ -33,3 +35,22 @@ class DatabaseSettings:
             user=environ["DB_USER"],
             password=password,
         )
+
+
+def connect(settings: DatabaseSettings, application_name: str) -> psycopg.Connection:
+    """Open a connection in autocommit mode.
+
+    Callers group their writes with `connection.transaction()`, so a
+    transaction is never left open between blocks. application_name shows
+    who is connected in pg_stat_activity.
+    """
+    return psycopg.connect(
+        host=settings.host,
+        port=settings.port,
+        dbname=settings.name,
+        user=settings.user,
+        password=settings.password,
+        application_name=application_name,
+        connect_timeout=10,
+        autocommit=True,
+    )

@@ -269,3 +269,10 @@ same tarballs would be pushed there instead. See
   attestations are disabled to keep tags deterministic (D15).
 - **Readable release versions:** combine a human version (e.g. `0.2.0`)
   with the content digest for our images (D15).
+- **Follow accounts by DID:** subscriptions store the handle, which is
+  resolved on every call. A renamed account then answers "Profile not
+  found". Resolve the handle once, store the account's DID, which never
+  changes, and fetch by DID (D18).
+- **Replies to other accounts, with context:** they are excluded today
+  because, without the post they answer, the LLM cannot interpret them
+  (often sarcasm). Fetch the parent post and classify the pair (D18).

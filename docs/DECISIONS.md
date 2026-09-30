@@ -833,6 +833,102 @@ decisions, **E** = development environment, **R** = repository layout.
   - As with D12, the checks prove what a label and a Secret allow, not what
     a particular running pod does.
 
+### D18. Handle ingestor: what it fetches and how it stores it (step 5a)
+
+- **Decision:**
+  - **What is fetched.** On each run (A8), every `handle` subscription gets
+    one call to `app.bsky.feed.getAuthorFeed` on `public.api.bsky.app`: one
+    page of 50 items, with no pagination (A2).
+    - `filter=posts_and_author_threads`: the account's posts and its own
+      threads, but **not its replies to other accounts** (the author's
+      decision).
+    - Reposts are dropped in code, because every filter includes them.
+      Posts without text (only an image or a link) are dropped too.
+  - **`created_at` = `min(record.createdAt, indexedAt)`.** `createdAt` is
+    set by the author's client; `indexedAt` is when Bluesky received the
+    post.
+  - **The response is untrusted input:**
+    - each item is validated and a malformed one is skipped and counted,
+      never stored;
+    - timestamps must carry a time zone;
+    - identifiers must be non-empty strings;
+    - NUL characters, which JSON allows and PostgreSQL `text` does not, are
+      removed from the text.
+  - **Settings are validated at start-up:** `limit` must be 1-100, and
+    `filter` must be one of the lexicon's values, because Bluesky silently
+    ignores an unknown filter. A 400 from Bluesky can then only mean a bad
+    subscription.
+  - **Writes:**
+    - `INSERT … ON CONFLICT DO NOTHING` without a conflict target (D17);
+      `rowcount` tells new rows from existing ones without `SELECT`;
+    - one transaction per subscription, so one failure never blocks the
+      others;
+    - a foreign-key violation means the subscription was deleted during the
+      run: nothing is stored and the run goes on.
+  - **Exit status:**
+    - 0 when every subscription was stored, or skipped because Bluesky
+      rejected the account (a warning);
+    - 1 when a network, Bluesky or database error prevented storing at
+      least one subscription (after processing the rest).
+  - **Libraries:**
+    - httpx 0.28.1: per-request timeouts, retries of failed connection
+      attempts only, and `MockTransport` for tests;
+    - psycopg 3 with no ORM, through `socialsignal_common.db.connect()`
+      (autocommit, with explicit transaction blocks), which the API and the
+      worker will reuse.
+  - **Tests:** pytest, in `tests/` at the root. `.dockerignore` leaves that
+    directory out of the build context, so changing a test never changes an
+    image tag (D15).
+- **Alternatives:**
+  - Filter:
+    - `posts_with_replies` (the default) also returns replies to other
+      accounts;
+    - `posts_no_replies` drops the author's own threads as well.
+  - Paginate until the 7-day window is covered.
+  - `created_at` from `createdAt` alone, or from `indexedAt` alone.
+  - Exit 1 for any problem, unknown accounts included.
+  - `urllib` from the standard library; SQLAlchemy for the inserts.
+- **Why:**
+  - **Replies to other accounts:** without the post they answer, the LLM
+    cannot interpret them, and on social networks many are sarcastic. The
+    author's own threads are part of what the account publishes.
+  - **Measured on `@bsky.app`, last 50 items:**
+
+    | `filter` | Posts | Own threads | Replies to others | Reposts | Oldest |
+    |---|---|---|---|---|---|
+    | `posts_with_replies` | 7 | 36 | 3 | 4 | late August |
+    | `posts_no_replies` | 35 | 0 | 0 | 15 | April |
+    | `posts_and_author_threads` | 7 | 35 | 0 | 4 | late August |
+
+  - **One page:** the worker only summarises the last 50 posts, and the
+    idempotent writes make the overlap between runs free.
+  - **The `created_at` cap:** a future `createdAt` would otherwise keep a
+    post among the "most recent" forever. A back-dated one (e.g. an import
+    from another network) correctly stays old.
+  - **Exit status:** an account that no longer exists would otherwise fail
+    every run until someone unsubscribes, hiding real failures.
+  - **Validating the filter:** a typo in `values.yaml` would otherwise
+    silently bring back the replies to other accounts.
+- **Trade-off:**
+  - The tone of the author's replies to other accounts is lost. Open item:
+    classify them with the post they answer as context.
+  - An account that publishes more than 50 items between two runs loses the
+    ones in between. The worker only uses the last 50, so the summary is
+    not affected.
+  - The handle is resolved on every call; a renamed account answers
+    "Profile not found". Open item: follow accounts by DID.
+  - One HTTP call per handle and run, with no backoff beyond the next
+    scheduled run. Many subscriptions could hit Bluesky's rate limits.
+- **Verified:**
+  - 25 unit tests pass (`uv run pytest`).
+  - A real call with the ingestor's client on `@bsky.app` kept 42 posts, all
+    by that account, and skipped 4 reposts. An unknown account and a
+    malformed handle both raised `ActorError` with Bluesky's message.
+  - The database side is tested in step 5b, inside the cluster, with the
+    ingestor's real identity. A `kubectl port-forward` would bypass the
+    NetworkPolicies and reach PostgreSQL through `localhost`, which the
+    image trusts without a password (D14).
+
 ---
 
 ## 3. Development environment (step 1)
@@ -990,3 +1086,10 @@ External facts the decisions above depend on.
 | Inserting into a `GENERATED ALWAYS AS IDENTITY` column needs no privilege on its sequence | Local test (D17): `\dp` shows no grants on `subscriptions_id_seq` | 2026-09-30 |
 | Foreign-key checks and `ON DELETE CASCADE` need no privileges on the other table | Local test (D17): lifecycle scenario | 2026-09-30 |
 | The official PostgreSQL image runs with `ssl = off`: client connections are not encrypted | `SHOW ssl` in the running pod | 2026-09-30 |
+| `getAuthorFeed` on `public.api.bsky.app` works without authentication; each item has `post` {`uri`, `cid`, `author` {`did`, `handle`}, `record` {`text`, `createdAt`}, `indexedAt`}, and a repost carries `reason` = `reasonRepost` | Real calls | 2026-09-30 |
+| `getAuthorFeed` `filter` values: `posts_with_replies` (default), `posts_no_replies`, `posts_with_media`, `posts_and_author_threads`, `posts_with_video`; `limit` is 1-100, default 50; declared errors `BlockedActor`, `BlockedByActor` | Lexicon `app/bsky/feed/getAuthorFeed.json` (bluesky-social/atproto) | 2026-09-30 |
+| `posts_no_replies` also drops the author's own threads; `posts_and_author_threads` keeps them and drops replies to other accounts; every filter includes reposts | Real calls on `@bsky.app` (D18) | 2026-09-30 |
+| An unknown `filter` value is ignored without an error: the default feed comes back | Real call | 2026-09-30 |
+| An unknown account answers 400 `InvalidRequest: Profile not found`; a malformed one, 400 `Invalid AT identifier`; `limit=101`, 400 | Real calls | 2026-09-30 |
+| Latest httpx 0.28.1 and pytest 9.1.1 | PyPI JSON API | 2026-09-30 |
+| uv accepts `[dependency-groups]` in a virtual workspace root (`uv add --dev`) | Local test | 2026-09-30 |

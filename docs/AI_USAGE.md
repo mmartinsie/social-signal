@@ -16,6 +16,9 @@ This file is only about the *development* process.
   - Session 1: Claude Code on Windows. Steps 0 and 1.
   - Session 2: the Claude Code extension for VS Code, running inside WSL2
     (Ubuntu 24.04). From step 2.
+  - Session 3: the same setup, in a new conversation after clearing the
+    context. The agent resumed from `CLAUDE.md`, `PROGRESS.md`,
+    `DECISIONS.md` and the code. From step 5.
 - Commits written with the agent carry a
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer.
 
@@ -322,3 +325,37 @@ memory is trimmed so it does not duplicate them.
     27/27 again.
 - **Checked against documentation:** the `SET ROLE` privilege semantics and
   the `ON CONFLICT` privilege rules (postgresql.org).
+
+### Step 5a: handle ingestor code (session 3)
+
+- **Agent proposed** to split step 5 into 5a (code, unit tests and a real
+  call to Bluesky) and 5b (image, CronJob and end to end in the cluster).
+  Before proposing, it checked the shape of real `getAuthorFeed` responses,
+  its error answers and the library versions.
+- **Agent mistake, corrected when the author asked:**
+  - It reported that 25 of 30 items in a sample were replies and
+    recommended including them, as if they were one kind of post.
+  - The author asked what replies were. The agent then split them: 23 were
+    the author's own threads and 2 were replies to other accounts.
+  - It found the `posts_and_author_threads` filter in the API's lexicon,
+    measured the three relevant filters on the same account, and revised its
+    recommendation.
+- **Author decided:**
+  - exclude replies to other accounts: without the post they answer, the
+    context is lost, and many replies on social networks are sarcastic;
+  - include the author's own threads;
+  - httpx as the HTTP client, and unit tests with pytest.
+- **Found by testing:**
+  - Bluesky silently ignores an unknown `filter` value, so a typo would bring
+    back the replies to other accounts. The ingestor validates it at
+    start-up.
+  - Malformed and unknown accounts both answer 400. With `limit` and
+    `filter` validated, a 400 can only mean a bad subscription, which is
+    logged as a warning and does not fail the run.
+- **Verified:**
+  - 25 unit tests pass;
+  - a real call on `@bsky.app` kept 42 posts, all by that account, and
+    skipped 4 reposts;
+  - uv accepts a `dev` dependency group in the virtual workspace root.
+
+  The database writes are tested in step 5b, inside the cluster.

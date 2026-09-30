@@ -3,3 +3,15 @@
 # dependency versions. Each member is built into its own image.
 [tool.uv.workspace]
 members = ["packages/*", "services/*"]
+
+# Development only: never installed in the images (`uv sync --no-dev`).
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+# Tests live outside the services, in tests/, which .dockerignore leaves out
+# of the build context: changing a test never changes an image tag (D15).
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
