@@ -1,14 +1,13 @@
 # Progress
 
-_Last updated: 2026-09-30 (step 3b)._
+_Last updated: 2026-09-30 (step 3c)._
 
 ## Current step
 
-**Step 3b: k3d cluster from the offline bundle, namespaces and default-deny.**
-Done.
+**Step 3c: per-component allow rules (Helm chart) and
+`make verify-boundary`.** Done.
 
-Next: **step 3c**: per-component allow rules (Helm chart) and
-`make verify-boundary`.
+Next: **step 4**: PostgreSQL in `data`, with schema, migrations and roles.
 
 ## Steps
 
@@ -19,7 +18,7 @@ Next: **step 3c**: per-component allow rules (Helm chart) and
 | 2 | Repository skeleton | Done (2026-09-30) |
 | 3a | Offline image bundle (`make build` downloads all third-party images) | Done (2026-09-30) |
 | 3b | k3d cluster from the bundle, namespaces and default-deny (`make start/stop/clean/distclean`) | Done (2026-09-30) |
-| 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Pending |
+| 3c | Per-component allow rules (Helm chart) and `make verify-boundary` | Done (2026-09-30) |
 | 4 | PostgreSQL: schema, migrations and roles | Pending |
 | 5 | Handle ingestor, end to end into PostgreSQL | Pending |
 | 6 | Hashtag ingestor with authentication | Pending |
@@ -34,16 +33,17 @@ Next: **step 3c**: per-component allow rules (Helm chart) and
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 3c: decide whether the ingest zone's egress is limited to port 443 and
-  excludes private address ranges.
-- Step 3c: verified labels for the policies: CoreDNS pods carry
-  `k8s-app=kube-dns` (ports 53/UDP and 53/TCP); Traefik pods carry
-  `app.kubernetes.io/name=traefik`, both in `kube-system`.
 - Step 4: decide where the Alembic migrations live.
+- Step 4: add PostgreSQL checks to `verify-boundary`: api and worker reach
+  it; llm does not; ingestor does.
+- Steps 5 and 9: pods must carry `app.kubernetes.io/component`, and Services
+  must also select `app.kubernetes.io/instance`, so that the
+  `verify-boundary` test pods never receive traffic (D12).
 - Step 6: decide how hashtag credentials are provided (A6).
 - Step 7: `k3d image import` copies each image into all 3 nodes, and imports
   are slow on this HDD. Measure it with the multi-GB LLM image and consider
-  importing it only where the LLM runs.
+  importing it only where the LLM runs. Add the LLM checks to
+  `verify-boundary`: the worker reaches it, the API does not.
 - Step 8: decide the tie-break rule for the dominant label (A3).
 
 ## How to resume
@@ -68,4 +68,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 | Date | Steps | Time | Notes |
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
-| 2026-09-30 | 2-3b | *TBD* | Session 2 (WSL) |
+| 2026-09-30 | 2-3c | *TBD* | Session 2 (WSL) |

@@ -16,7 +16,7 @@
    - what was done and in which files,
    - how I can check it myself (exact command and expected result),
    - what could go wrong,
-   - 2 or 3 questions someone could ask me about this step, with a short answer. Only in the chat, never in repo files.
+   - 2 or 3 questions someone could ask me about this step, with a short answer. Write them only into `readme_personal.md` (git-ignored, never committed) and just mention in the chat that they were added.
 6. Record every decision in `docs/DECISIONS.md`: the decision, the alternatives considered, why we chose it and its trade-offs. That file will later feed `DESIGN.md`.
 7. Languages: explanations to me in Spanish. Code, comments, commits, `README.md`, `DESIGN.md` and `docs/DECISIONS.md` in English.
 8. Scope: stick to the brief. If something is an extra, don't implement it: add it to "Open items" in `DESIGN.md` and tell me.

@@ -116,14 +116,25 @@ decisions, **E** = development environment, **R** = repository layout.
   | API (`analysis`) | Traefik only | PostgreSQL 5432, DNS |
   | Summary worker (`analysis`) | nothing | PostgreSQL 5432, DNS, LLM |
   | LLM server (`analysis`) | summary worker only | nothing |
-  | Ingestor (`ingest`) | nothing | internet, PostgreSQL 5432, DNS |
-  | PostgreSQL (`data`) | 5432 from `ingest`, `analysis` and the migration Job | nothing |
+  | Ingestor (`ingest`) | nothing | internet on TCP 443 only, excluding private and link-local ranges; PostgreSQL 5432; DNS |
+  | PostgreSQL (`data`) | 5432 from the ingestor, the API, the worker and the migration Job | nothing |
+  | Migration Job (`data`) | nothing | PostgreSQL 5432, DNS |
 
   DNS means port 53 TCP/UDP, only towards the CoreDNS pods (`kube-system`,
   `k8s-app=kube-dns`), selected by labels; no IP addresses are hard-coded.
-  PostgreSQL is the only bridge between zones. `make verify-boundary` proves
-  that `curl` to Bluesky and to a public IP (1.1.1.1) fails from `analysis`
-  and works from `ingest`, and that `analysis` can still reach PostgreSQL.
+  PostgreSQL is the only bridge between zones.
+
+  **Refinement (step 3c, approved by the author).** The ingestor's internet
+  access is limited to TCP 443, and 10/8, 172.16/12, 192.168/16, 100.64/10
+  and 169.254/16 are excluded. The ingestor parses untrusted content from
+  the internet; if it were compromised, it must not reach the LAN, the
+  cluster nodes, the Kubernetes API (`172.18.0.2:6443` here) or cloud
+  metadata endpoints.
+
+  `make verify-boundary` proves the rules (D12): the ingestor reaches
+  Bluesky and 1.1.1.1 but not the Kubernetes API; the API and the worker
+  resolve names but cannot connect out; the LLM cannot even resolve names.
+  The PostgreSQL checks are added in step 4 and the LLM checks in step 7.
   It waits a few seconds before testing (see below).
 - **Why:** NetworkPolicies are native, declarative and versioned with the
   Helm chart, and k3s enforces them out of the box (verified). The rules are
@@ -137,6 +148,8 @@ decisions, **E** = development environment, **R** = repository layout.
     policy-enforcing CNI.
   - In k3s a new pod can run for a few hundred milliseconds before its
     policies apply (k3s issue #14711), hence the wait in `verify-boundary`.
+  - A site whose internet access goes through a proxy on a private address
+    needs an exception in `values.yaml`.
 
 ### A6. Credentials for hashtag search
 
@@ -278,6 +291,13 @@ decisions, **E** = development environment, **R** = repository layout.
 - **Trade-off:** the zones cannot be upgraded independently. The chart
   creates resources in several namespaces, so installs and uninstalls need
   care.
+- **Implementation (step 3c):**
+  - Every template sets its namespace explicitly. The release metadata is
+    stored in `default`, because the release has no single "home" zone and
+    the namespaces belong to the platform layer (D7).
+  - `make start` runs `helm upgrade --install … --wait`; bare `--wait` means
+    the `watcher` strategy in Helm 4 and is also valid in Helm 3.
+  - Namespace names are values, and they must match `deploy/platform`.
 
 ### D3. Ingress through Traefik
 
@@ -456,6 +476,39 @@ decisions, **E** = development environment, **R** = repository layout.
   with k3d.
 - **Trade-off:** a restart takes about 2 minutes on this machine.
 
+### D12. How `make verify-boundary` tests the policies (step 3c)
+
+- **Decision:**
+  - `scripts/verify-boundary.sh` starts one curl pod per component identity
+    (ingestor, api, worker, llm). Each carries that component's
+    `app.kubernetes.io/component` label, so exactly the same NetworkPolicies
+    apply to it as to the real pods.
+  - It waits 5 s (k3s #14711), runs the checks with `kubectl exec`, prints
+    a PASS/FAIL table, deletes the pods and exits 1 on any failure.
+  - There are two kinds of check:
+    - DNS: `timeout 5 nslookup <name>.`, giving *resolves* or *no-dns*.
+    - Connection: the curl exit code, where 0 = *open* and 7/28 =
+      *blocked*.
+- **Alternatives:**
+  - `kubectl exec` into the real pods: needs curl in the application
+    images, and they do not exist yet.
+  - `kubectl debug` ephemeral containers in the real pods: tests the real
+    network namespace, but the containers stay in the pod spec until it
+    restarts, and it also needs the real pods.
+- **Why:**
+  - It works from step 3 on, independently of the application images.
+  - It exercises the real policies in the real cluster, not a simulation.
+- **Trade-off:**
+  - It proves the policy attached to a *label*, not to a specific running
+    pod. The chart must give the real pods the same component labels.
+  - The Services added later must select an extra label (e.g.
+    `app.kubernetes.io/instance`), so that a test pod never receives real
+    traffic.
+- **Lesson:** the first version used curl's exit codes alone and failed on
+  the LLM pod. A dropped DNS query and a dropped connection both end in a
+  timeout (exit 28), so DNS is now checked separately. For the API,
+  *resolves* plus *blocked* proves that the policy, not DNS, stops it.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -547,6 +600,8 @@ decisions, **E** = development environment, **R** = repository layout.
 - **Alternatives:** empty targets that succeed.
 - **Why:** a placeholder can never be mistaken for a working build.
 - **Trade-off:** none worth noting while the targets are being filled in.
+  Since step 3c every target is implemented and the placeholder helper has
+  been removed.
 
 ### R4. AI traceability is versioned
 
@@ -586,3 +641,8 @@ External facts the decisions above depend on.
 | A wildcard `*` mirror counts as "listed": an image from `registry.k8s.io` is not pulled either | Local test (D9) | 2026-09-30 |
 | k3s imports the air-gap tarball asynchronously; pods can start (and pull) before it finishes | Local test: k3s logs vs. pod events | 2026-09-30 |
 | After `k3d cluster stop/start` an agent can get a new IP and crash-loop until the Node object is updated | Local test (D11) | 2026-09-30 |
+| CoreDNS pods carry `k8s-app=kube-dns` (53/UDP, 53/TCP); Traefik pods carry `app.kubernetes.io/name=traefik`; both run in `kube-system` | `kubectl get pods --show-labels` on the cluster | 2026-09-30 |
+| The Kubernetes API Service (`10.43.0.1:443`) points to `172.18.0.2:6443`, a private address | `kubectl get svc,endpointslices` | 2026-09-30 |
+| Helm 4: bare `--wait` means the `watcher` strategy; without the flag it defaults to `hookOnly` | `helm upgrade --help` (v4.3.0) | 2026-09-30 |
+| `curlimages/curl:8.22.0` ships busybox `nslookup` and `timeout` | Layers of the bundled tarball | 2026-09-30 |
+| curl exit 28 cannot tell a dropped DNS query from a dropped connection | Local test (D12) | 2026-09-30 |

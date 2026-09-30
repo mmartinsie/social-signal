@@ -182,3 +182,33 @@ memory is trimmed so it does not duplicate them.
   - default-deny: `analysis` cannot resolve DNS, while `default` gets
     HTTP 200;
   - Traefik answers 404 on `127.0.0.1:8088`.
+
+### Step 3c: per-component allow rules and `make verify-boundary` (session 2)
+
+- **Agent proposed and built:**
+  - the Helm chart with the six NetworkPolicies of A5;
+  - the verification script, using curl pods that carry each component's
+    labels;
+  - the Helm step in `make start`.
+
+  Before writing the policies it verified the real CoreDNS and Traefik
+  labels, the private address behind the Kubernetes API, and Helm 4's
+  `--wait` semantics. It also validated the chart with `helm lint` and a
+  server-side dry run.
+- **Author decided:** limit the ingestor's egress to TCP 443 and exclude the
+  private and link-local ranges (refinement of A5).
+- **Problem found by testing:** the first run failed 1 of 9 checks. The LLM
+  pod was expected to fail at DNS (curl exit 6) but timed out (exit 28),
+  because curl's connect timeout also covers name resolution. The policy
+  was right; the test's classification was ambiguous. The agent explained
+  it and added a separate DNS check (`timeout 5 nslookup`), after confirming
+  that the curl image ships those tools. This small fix inside the approved
+  test script was applied without a separate approval round.
+- **Author asked** for the likely questions about each step to be
+  collected, with
+  answers, only in the git-ignored `readme_personal.md` from now on. Rule 5
+  of `CLAUDE.md` was updated accordingly.
+- **Verified:**
+  - `make verify-boundary` passes 11/11 in about 17 s and deletes its pods;
+  - `make start` is idempotent (about 32 s on a running cluster; Helm
+    revision 2).

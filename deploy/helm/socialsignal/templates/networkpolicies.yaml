@@ -1,0 +1,164 @@
+{{- /*
+Per-component allow rules on top of the platform's default-deny (A5, D7).
+Pods are selected by app.kubernetes.io/component. With both directions
+denied by default, a connection needs an egress rule on the client AND an
+ingress rule on the server; the pairs below always come together.
+*/ -}}
+{{- $ns := .Values.namespaces }}
+# ---------------------------------------------------------------- analysis
+# API: reached only through Traefik; talks only to PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api
+  namespace: {{ $ns.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.ingressController.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.ingressController.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ports.api }}
+  egress:
+    {{- include "socialsignal.egressDNS" . | nindent 4 }}
+    {{- include "socialsignal.egressPostgres" . | nindent 4 }}
+---
+# Summary worker: no ingress; talks to PostgreSQL and the local LLM.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: worker
+  namespace: {{ $ns.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: worker
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "socialsignal.egressDNS" . | nindent 4 }}
+    {{- include "socialsignal.egressPostgres" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: llm
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ports.llm }}
+---
+# LLM server: reached only by the worker; no egress at all (weights are
+# baked into the image, nothing to download).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm
+  namespace: {{ $ns.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: llm
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: worker
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ports.llm }}
+---
+# ------------------------------------------------------------------ ingest
+# Ingestor: no ingress; HTTPS to the public internet, and PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingestor
+  namespace: {{ $ns.ingest }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: ingestor
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "socialsignal.egressDNS" . | nindent 4 }}
+    {{- include "socialsignal.egressPostgres" . | nindent 4 }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml .Values.ingestor.internetEgress.excludedCidrs | nindent 14 }}
+      ports:
+        {{- range .Values.ingestor.internetEgress.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+---
+# -------------------------------------------------------------------- data
+# PostgreSQL: the only bridge between zones; no egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: {{ $ns.data }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: postgres
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns.ingest }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: ingestor
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ns.analysis }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, worker]
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: migrator
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ports.postgres }}
+---
+# Migration Job (Alembic, step 4): talks only to PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: migrator
+  namespace: {{ $ns.data }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: migrator
+  policyTypes: [Ingress, Egress]
+  egress:
+    {{- include "socialsignal.egressDNS" . | nindent 4 }}
+    {{- include "socialsignal.egressPostgres" . | nindent 4 }}

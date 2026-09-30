@@ -1,0 +1,6 @@
+apiVersion: v2
+name: socialsignal
+description: On-premises sentiment analysis of Bluesky handles and hashtags.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

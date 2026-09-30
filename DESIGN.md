@@ -66,7 +66,40 @@ k3s enforces it with its embedded kube-router controller. A test pod in
 the Helm release (D7), so uninstalling the application never removes the
 baseline or a namespace.
 
-*Per-component allow rules and `make verify-boundary`: TBD (step 3c).*
+**Per-component allow rules (Helm chart, step 3c).** On top of the
+baseline, each component gets only what it needs, selected by its
+`app.kubernetes.io/component` label:
+
+| Component (zone) | Ingress from | Egress to |
+|---|---|---|
+| API (`analysis`) | Traefik only, port 8000 | PostgreSQL, DNS |
+| Worker (`analysis`) | nothing | PostgreSQL, DNS, LLM |
+| LLM (`analysis`) | worker only, port 8080 | nothing |
+| Ingestor (`ingest`) | nothing | internet on TCP 443 only, excluding private and link-local ranges; PostgreSQL; DNS |
+| PostgreSQL (`data`) | ingestor, API, worker, migration Job (5432) | nothing |
+| Migration Job (`data`) | nothing | PostgreSQL, DNS |
+
+DNS egress is allowed only towards the CoreDNS pods, and no IP is
+hard-coded. The analysis zone is stricter than "local network only": it can
+reach PostgreSQL, the cluster DNS and its own LLM, nothing else. The ingestor
+cannot reach the LAN or the Kubernetes API even if it is compromised.
+
+**Proof.** `make verify-boundary` starts a curl pod with each component's
+labels, so the same policies apply, and checks the outcome (D12):
+
+```
+PASS  ingestor  ingest     https://public.api.bsky.app/xrpc/_health   expected open
+PASS  ingestor  ingest     https://1.1.1.1                            expected open
+PASS  ingestor  ingest     https://kubernetes.default.svc             expected blocked
+PASS  api       analysis   dns public.api.bsky.app                    expected resolves
+PASS  api       analysis   https://public.api.bsky.app/xrpc/_health   expected blocked
+PASS  api       analysis   https://1.1.1.1                            expected blocked
+PASS  worker    analysis   (same as api)
+PASS  llm       analysis   dns public.api.bsky.app                    expected no-dns
+PASS  llm       analysis   https://1.1.1.1                            expected blocked
+```
+
+*Checks against PostgreSQL (step 4) and the LLM (step 7): TBD.*
 
 ## 6. High availability
 

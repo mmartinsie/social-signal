@@ -28,17 +28,19 @@ KUBE_CONTEXT    := k3d-$(CLUSTER)
 K3D_CONFIG      := deploy/k3d/cluster.yaml
 PLATFORM_DIR    := deploy/platform
 
+HELM_RELEASE    := socialsignal
+HELM_CHART      := deploy/helm/socialsignal
+# Only the release metadata lives here; every resource sets its own namespace.
+HELM_NAMESPACE  := default
+
 # Everything the scripts need, passed explicitly as environment variables.
 SCRIPT_ENV = K3S_VERSION='$(K3S_VERSION)' K3S_IMAGE='$(K3S_IMAGE)' \
   K3D_PROXY_IMAGE='$(K3D_PROXY_IMAGE)' K3D_TOOLS_IMAGE='$(K3D_TOOLS_IMAGE)' \
+  CURL_IMAGE='$(CURL_IMAGE)' \
   NODE_IMAGES='$(NODE_IMAGES)' WORKLOAD_IMAGES='$(WORKLOAD_IMAGES)' \
   IMAGES_DIR='$(IMAGES_DIR)' ARCH='$(ARCH)' \
   CLUSTER='$(CLUSTER)' KUBE_CONTEXT='$(KUBE_CONTEXT)' \
   K3D_CONFIG='$(K3D_CONFIG)' PLATFORM_DIR='$(PLATFORM_DIR)'
-
-# Targets are implemented step by step. Until then they fail loudly so that a
-# placeholder is never mistaken for a working step. $(1) = planned step.
-not_implemented = echo "make $@: not implemented yet (planned in step $(1), see docs/PROGRESS.md)" >&2; exit 1
 
 .PHONY: help build images start stop clean distclean verify-boundary
 
@@ -52,6 +54,8 @@ images: ## Download every third-party image into the offline bundle
 
 start: ## Start the local cluster from the offline bundle and deploy the system
 	@$(SCRIPT_ENV) sh scripts/cluster-up.sh
+	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
+	  --kube-context $(KUBE_CONTEXT) --namespace $(HELM_NAMESPACE) --wait --timeout 10m
 
 stop: ## Stop the local cluster, keeping its state
 	k3d cluster stop $(CLUSTER)
@@ -63,4 +67,4 @@ distclean: clean ## Delete the local cluster and the image bundle
 	rm -rf dist
 
 verify-boundary: ## Prove that the analysis zone cannot reach the internet
-	@$(call not_implemented,3)
+	@$(SCRIPT_ENV) sh scripts/verify-boundary.sh

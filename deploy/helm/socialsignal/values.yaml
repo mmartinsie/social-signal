@@ -1,0 +1,38 @@
+# The namespaces and their default-deny policies belong to the platform layer
+# (deploy/platform), not to this chart (D7). These names must match it.
+namespaces:
+  ingest: ingest
+  data: data
+  analysis: analysis
+
+# Ports the NetworkPolicies open between components.
+ports:
+  api: 8000
+  llm: 8080
+  postgres: 5432
+
+# Cluster DNS: egress on port 53 is allowed only towards these pods.
+dns:
+  namespace: kube-system
+  podLabels:
+    k8s-app: kube-dns
+
+# Ingress controller: the only client allowed to reach the API.
+ingressController:
+  namespace: kube-system
+  podLabels:
+    app.kubernetes.io/name: traefik
+
+ingestor:
+  # Internet access for the ingest zone: HTTPS only, and never towards
+  # private or link-local ranges (the LAN, the cluster nodes and the
+  # Kubernetes API, cloud metadata endpoints). A site whose internet access
+  # goes through a proxy on a private address needs an exception here.
+  internetEgress:
+    ports: [443]
+    excludedCidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+      - 169.254.0.0/16
