@@ -155,21 +155,54 @@ decisions, **E** = development environment, **R** = repository layout.
 
 - **Requirement:** subscriptions to hashtags; how to access Bluesky is not
   specified.
-- **Facts (verified):** `app.bsky.feed.searchPosts` returns 403 without
-  authentication. It works on `api.bsky.app` with a Bearer token from
-  `com.atproto.server.createSession`; `public.api.bsky.app` returns 403 even
-  with a token.
-- **Options:** make credentials mandatory; optional credentials, with
-  hashtags disabled when they are missing; consume the public firehose
-  (Jetstream) and filter hashtags locally, without credentials.
-- **Decision:** **deferred to step 6.** Proposal: an optional `.env` file
-  turned into a Kubernetes Secret that exists only in `ingest`; without
-  credentials, hashtag subscriptions are disabled.
-- **Why (proposal):** the reviewer can run the system without a Bluesky
-  account, and the secret never reaches the analysis zone.
-- **Trade-off (proposal):** with no credentials, half of requirement 1 is
-  unavailable. The firehose avoids credentials but means a continuous,
-  high-volume stream.
+- **Facts (verified 2026-09-30; they correct what step 0 recorded):**
+  - `app.bsky.feed.searchPosts` answers:
+
+    | Host | Result |
+    |---|---|
+    | `public.api.bsky.app` | 403, with or without a token |
+    | `api.bsky.app` without a token | 200 today |
+    | `api.bsky.app` with a token | 500: these direct AppView hosts "do not support authentication" (Bluesky's rate-limit guide) |
+    | `bsky.social` (the entryway) | 401 `AuthMissing` without a token |
+
+  - The documented authenticated path is to log in with
+    `com.atproto.server.createSession` at `bsky.social`, then send requests
+    to the account's PDS, which forwards them to the AppView.
+  - Bluesky blocks unauthenticated search on purpose, to reduce load, and
+    turns the block on and off. A Bluesky contributor says so in
+    bsky-docs #332. On 2026-08-18 `api.bsky.app` was blocked as well.
+  - `createSession` is limited to 30 per 5 minutes and 300 per day per
+    account.
+- **Options:**
+  - A. Credentials required: without them, no hashtags.
+  - B. Unauthenticated search only, on `api.bsky.app`.
+  - C. Hybrid: credentials when provided, otherwise unauthenticated search.
+  - D. The public firehose (Jetstream), filtering hashtags locally, with no
+    credentials.
+- **Decision:** **C, hybrid** (the author's choice).
+  - Credentials are optional, in a git-ignored `.env`, turned into a
+    Kubernetes Secret that exists only in `ingest` and that only the hashtag
+    ingestor mounts.
+  - With credentials, it logs in and searches through the PDS.
+  - Without them, it searches `api.bsky.app` directly. Bluesky's 403 is
+    then a warning that says how to add credentials, not a failure.
+  - The details are in D20.
+- **Why:**
+  - The reviewer can try hashtags without a Bluesky account while Bluesky
+    allows it, and with a `.env` it always works.
+  - The secret never reaches the analysis zone, nor the handle ingestor.
+  - A relies on the reviewer having an account.
+  - B depends on a block that Bluesky toggles.
+  - D is a continuous, high-volume stream that needs a long-running
+    consumer.
+- **Not done on purpose:** the 403 can be avoided by changing the case of
+  the method name in the URL (#332). That would deliberately bypass
+  Bluesky's load control, so it is not used.
+- **Trade-off:**
+  - Two code paths to test.
+  - Without credentials, hashtags stop updating whenever Bluesky turns the
+    block on. The warning, and the summary's `updated_at`, make that
+    visible.
 
 ### A7. Local platform and database
 
@@ -396,8 +429,11 @@ decisions, **E** = development environment, **R** = repository layout.
 - **Decision:**
   - Handles: `app.bsky.feed.getAuthorFeed` on `public.api.bsky.app`,
     unauthenticated.
-  - Hashtags: `app.bsky.feed.searchPosts` on `api.bsky.app` with a Bearer
-    token (see A6).
+  - Hashtags: `app.bsky.feed.searchPosts`. With credentials it goes through
+    the account's PDS, after logging in at `bsky.social`; without them,
+    unauthenticated to `api.bsky.app` (A6, D20). *Corrected in step 6: this
+    line used to say "on `api.bsky.app` with a Bearer token", which that
+    host does not support.*
   - Writes are idempotent, keyed on each post's URI.
 - **Alternatives:** the firehose or Jetstream; a third-party AT Protocol
   SDK.
@@ -1001,6 +1037,89 @@ decisions, **E** = development environment, **R** = repository layout.
     by its history limit.
   - `make verify-boundary`: 27/27.
 
+### D20. Hashtag ingestor (step 6a)
+
+- **Decision:**
+  - **Same package and image as the handle ingestor, with a subcommand:**
+    `python -m socialsignal_ingestor hashtags` (and `handles`). It runs as
+    a separate CronJob (step 6b).
+  - **Query:** `searchPosts` with `q=#<tag>`, `tag=<tag>` and
+    `sort=latest`, one page of 50 (A2).
+  - **Replies:** the same rule as for handles (the author's decision). A
+    reply is kept only if both the post it answers and the thread's first
+    post are by the same author; otherwise it is skipped as "reply to
+    others". Search returns no reposts.
+  - **Credentials (A6, hybrid):** read from files in a mounted Secret
+    (`identifier`, `app-password`).
+    - The Secret is optional: a missing or empty directory means no
+      credentials. Having only one of the two is a configuration error.
+    - **With credentials:** one `createSession` at the entryway
+      (`bsky.social`) per run, and only if there are hashtag
+      subscriptions. Searches go to the account's PDS, taken from its DID
+      document, with the entryway as fallback. Only an `https` URL is
+      accepted there, because the token is sent to it. The token is not
+      kept between runs.
+    - **Without credentials:** search `api.bsky.app` directly.
+  - **Outcomes:**
+    - A 403 **without** credentials gives one warning that explains how to
+      add credentials. The run stops searching, since every request would
+      get the same answer, and exits 0.
+    - A 403 **with** credentials, a rejected login, or a network or database
+      error is a failure: exit 1.
+    - A 400 (`BadQueryString`) skips that subscription with a warning.
+  - **Secrets:** `Credentials` and `Session` hide the password and the
+    token in their `repr`, and nothing logs them.
+- **Alternatives:**
+  - **One CronJob for both kinds.** The handle ingestor would also receive
+    the credentials, and every run would log in: every 5 minutes, 288 of
+    the 300 daily logins.
+  - **Keep the session between runs** (refresh token). It needs writable
+    storage in `ingest`, or a long-running pod, which changes A8. Open item.
+  - **`q=*` with the `tag` filter, or `q=#tag` alone.** They returned the
+    same posts. `q=#tag` plus `tag` states the intent twice, and does not
+    depend on how `*` is parsed.
+  - **Look at the parent only to classify a reply.** On the sample it gives
+    the same result. The root is checked too, so that a reply inside
+    someone else's thread counts as conversation.
+- **Why:**
+  - A separate CronJob gives least privilege, since only it mounts the
+    Secret. It also has its own schedule, and an authentication problem
+    never affects handles.
+  - The reply rule matches the one for handles and the author's reasons (no
+    context, sarcasm). On `@bsky.app` it reproduces the API's own filter
+    exactly.
+- **Trade-off:**
+  - For a very busy hashtag, 50 posts may cover only minutes, and posts
+    published between runs are missed. The worker only uses the latest 50
+    anyway.
+  - Logging in on every run spends part of a daily quota that is shared
+    with any other use of the same account.
+  - An app password is not read-only: it can act as the account, even
+    though the ingestor only reads. OAuth with narrower permissions is an
+    open item.
+- **Verified:**
+  - **53 unit tests pass.** They include the hybrid logic against a fake
+    Bluesky:
+    - no subscriptions means no login;
+    - without credentials, the search goes to the AppView host with no
+      `Authorization` header;
+    - a 403 without credentials gives a warning after one request, stores
+      nothing and exits 0;
+    - with credentials, it logs in at the entryway and searches at the PDS
+      with the Bearer token;
+    - a rejected login fails every hashtag, and so does a 403 with
+      credentials.
+  - **Real unauthenticated call on `#python`:** `api.bsky.app` kept 50
+    posts by 30 authors, covering about 11 hours; `public.api.bsky.app`
+    raised `SearchForbidden`.
+  - **Real authenticated call, with the author's app password from
+    `.env`:**
+    - `createSession` at `bsky.social` returned the account's DID and its
+      PDS (`*.host.bsky.network`), taken from the DID document;
+    - `#python` searched through that PDS with the Bearer token kept 50
+      posts by 30 authors;
+    - the script printed neither the password nor the token.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1115,7 +1234,15 @@ External facts the decisions above depend on.
 | Fact | Source | Checked |
 |---|---|---|
 | Gemma 4 variants are E2B, E4B, 12B, 26B A4B and 31B; there is no "A2B" | ai.google.dev/gemma/docs/core | 2026-09-28 |
-| `searchPosts` returns 403 without authentication; it works on `api.bsky.app` with a `createSession` Bearer token; `public.api.bsky.app` returns 403 even with a token | bsky-docs #332; kamoras/civitas PR #594 | 2026-09-28 |
+| ~~`searchPosts` returns 403 without authentication; it works on `api.bsky.app` with a `createSession` Bearer token~~ **Wrong, corrected on 2026-09-30:** see the next rows. It came from secondary sources and was not tested at the time | bsky-docs #332; kamoras/civitas PR #594 | 2026-09-28 |
+| `searchPosts`: `public.api.bsky.app` 403; `api.bsky.app` 200 without a token and 500 with one; `bsky.social` 401 `AuthMissing` without a token | Real calls | 2026-09-30 |
+| The direct AppView hosts (`api.bsky.app`, `public.api.bsky.app`) "do not support authentication"; authenticated clients go through their PDS; `createSession` is limited to 30 per 5 minutes and 300 per day per account | bsky-docs `rate-limits.md`, `api-directory.mdx` | 2026-09-30 |
+| Bluesky blocks unauthenticated search on purpose, to reduce load, and turns the block on and off (on 2026-08-18 it also covered `api.bsky.app`) | bsky-docs #332: comments by a Bluesky contributor and by users | 2026-09-30 |
+| Session management goes through the entryway (`bsky.social`); the account's PDS is the one in the DID document returned by `createSession`; application requests can go to either, and the PDS is preferred | bsky-docs `entryway.md` | 2026-09-30 |
+| `searchPosts`: `q` required; `tag` filters by hashtag facet (no `#`); `sort` is `top` or `latest` (default `latest`); `limit` 1-100, default 25; returns `posts` (post views), `cursor`, `hitsTotal`; declared error `BadQueryString` | Lexicon `app/bsky/feed/searchPosts.json` | 2026-09-30 |
+| `q=#python`, `q=python&tag=python` and `q=*&tag=python` all return posts carrying the `python` tag facet (100 of 100) | Real calls | 2026-09-30 |
+| On `@bsky.app`, keeping replies whose parent (and root) is the author reproduces `posts_and_author_threads` exactly: 67 of 67, 0 differences over the same time span | Real calls (D20) | 2026-09-30 |
+| `createSession` at `bsky.social` with an app password returns the DID document with the account's PDS; `searchPosts` sent to that PDS with the Bearer token works | Real call with the author's account (D20) | 2026-09-30 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

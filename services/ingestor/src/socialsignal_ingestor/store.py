@@ -15,7 +15,7 @@ import psycopg
 
 from socialsignal_ingestor.bluesky import Post
 
-SELECT_HANDLES = "SELECT id, value FROM subscriptions WHERE kind = 'handle' ORDER BY id"
+SELECT_SUBSCRIPTIONS = "SELECT id, value FROM subscriptions WHERE kind = %s ORDER BY id"
 
 INSERT_POST = """
     INSERT INTO posts (uri, cid, author_did, author_handle, text, created_at)
@@ -33,6 +33,7 @@ INSERT_LINK = """
 @dataclass(frozen=True)
 class Subscription:
     id: int
+    # Normalised by the API: a handle without "@", a hashtag without "#".
     value: str
 
 
@@ -42,8 +43,9 @@ class StoreResult:
     new_links: int
 
 
-def handle_subscriptions(connection: psycopg.Connection) -> list[Subscription]:
-    rows = connection.execute(SELECT_HANDLES).fetchall()
+def subscriptions(connection: psycopg.Connection, kind: str) -> list[Subscription]:
+    """Subscriptions of one kind: 'handle' or 'hashtag'."""
+    rows = connection.execute(SELECT_SUBSCRIPTIONS, (kind,)).fetchall()
     return [Subscription(id=row[0], value=row[1]) for row in rows]
 
 

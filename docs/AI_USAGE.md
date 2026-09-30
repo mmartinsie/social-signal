@@ -393,3 +393,49 @@ memory is trimmed so it does not duplicate them.
   - a scheduled run completed on its own;
   - `verify-boundary` 27/27;
   - 0 image pulls.
+
+### Step 6a: hashtag ingestor code (session 3)
+
+- **Agent found that a recorded "verified fact" was wrong.** Before
+  proposing, it re-checked hashtag search with real calls:
+  - `api.bsky.app` answered 200 without a token, and 500 with one. Step 0
+    had recorded that search needed a token on that host, from secondary
+    sources, without a real test.
+  - The Bluesky docs say those hosts do not support authentication.
+  - bsky-docs #332 shows that the 403 is a deliberate load block that
+    Bluesky turns on and off.
+
+  The agent reported the contradiction, corrected the record, and marked
+  the old row as wrong instead of deleting it.
+- **Agent refused a shortcut:** the issue documents a way around the block
+  (changing the case of the method name). The agent flagged it as
+  deliberately bypassing Bluesky's load control and excluded it.
+- **Agent proposed** four options for A6 and recommended the hybrid one: a
+  separate CronJob every 15 minutes, because `createSession` allows 300
+  logins per day, and the same reply rule as for handles.
+- **Author decided:**
+  - the hybrid approach;
+  - the same reply rule;
+  - asked why every 15 minutes: the agent showed the logins-per-day
+    arithmetic, and the schedule is decided in 6b;
+  - the author will provide an app password in `.env` for the real
+    authenticated test.
+- **Found by testing:**
+  - To define "own thread", the agent compared its rule with the API's
+    `posts_and_author_threads` filter. A first count seemed to differ
+    (36 against 35). Over the same time span, both rules (parent only, and
+    parent plus root) matched the API exactly (67 of 67), so the difference
+    was a page-boundary artefact.
+- **Verified:**
+  - 53 unit tests pass, including the hybrid logic against a fake Bluesky;
+  - a real unauthenticated search for `#python` through the ingestor's code
+    worked on `api.bsky.app` and raised `SearchForbidden` on
+    `public.api.bsky.app`;
+  - the authenticated path worked with the author's app password.
+- **Handling of the secret:**
+  - The author created `.env` by hand and wrote the app password in it; it
+    never went through the conversation.
+  - The agent did not open the file. It checked its mode (600) and that
+    git ignores it.
+  - It ran a throwaway script, outside the repository, that printed only
+    the DID, the PDS host, the password's length and the result counts.

@@ -49,7 +49,7 @@ spec:
             - name: ingestor
               image: {{ required "images.ingestor is required (set by make start)" .Values.images.ingestor }}
               imagePullPolicy: IfNotPresent
-              command: [python, -m, socialsignal_ingestor]
+              command: [python, -m, socialsignal_ingestor, handles]
               env:
                 - name: DB_HOST
                   value: {{ .Values.database.host | quote }}

@@ -1,11 +1,13 @@
-"""Parsing of getAuthorFeed responses and the client's error handling.
+"""Parsing of getAuthorFeed and searchPosts responses, login, and the
+client's error handling.
 
-The items are synthetic, but follow the shape of real responses from
-public.api.bsky.app (checked 2026-09-30): each feed item has a `post` with
-uri, cid, author {did, handle}, record {text, createdAt} and indexedAt, and
-a repost carries a `reason`.
+The items are synthetic, but follow the shape of real responses (checked
+2026-09-30): a post has uri, cid, author {did, handle}, record {text,
+createdAt, reply?} and indexedAt; a feed item wraps it in `post`, and a
+repost carries a `reason`; searchPosts returns posts directly.
 """
 
+import json
 from datetime import UTC, datetime
 
 import httpx
@@ -130,10 +132,10 @@ def test_requests_one_page_of_the_author_feed():
     }
 
 
-def test_a_rejected_account_raises_actor_error():
+def test_a_rejected_account_raises_subscription_rejected():
     client = client_answering(400, {"error": "InvalidRequest", "message": "Profile not found"})
 
-    with pytest.raises(bluesky.ActorError, match="Profile not found"):
+    with pytest.raises(bluesky.SubscriptionRejected, match="Profile not found"):
         bluesky.get_author_posts(client, "nobody.test", limit=50, feed_filter="posts_with_replies")
 
 
@@ -143,3 +145,157 @@ def test_other_http_errors_raise_http_status_error(status):
 
     with pytest.raises(httpx.HTTPStatusError):
         bluesky.get_author_posts(client, "author.test", limit=50, feed_filter="posts_with_replies")
+
+
+# ---------------------------------------------------------------- search ---
+
+OTHER_DID = "did:plc:other0000000000000000000"
+
+
+def post_uri(did: str, rkey: str = "p") -> str:
+    return f"at://{did}/app.bsky.feed.post/{rkey}"
+
+
+def reply(rkey: str, parent_did: str, root_did: str) -> dict:
+    view = item(rkey)["post"]
+    view["record"]["reply"] = {
+        "parent": {"uri": post_uri(parent_did), "cid": "bafyparent"},
+        "root": {"uri": post_uri(root_did), "cid": "bafyroot"},
+    }
+    return view
+
+
+def test_search_keeps_posts_and_own_threads_but_not_replies_to_others():
+    views = [
+        item("1")["post"],
+        reply("2", parent_did=AUTHOR_DID, root_did=AUTHOR_DID),  # own thread
+        reply("3", parent_did=OTHER_DID, root_did=OTHER_DID),  # answers someone
+        reply("4", parent_did=AUTHOR_DID, root_did=OTHER_DID),  # in someone's thread
+    ]
+
+    posts, skipped = bluesky.parse_search_posts({"posts": views})
+
+    assert [p.cid for p in posts] == ["bafy1", "bafy2"]
+    assert skipped == {"reply to others": 2}
+
+
+def test_search_skips_a_reply_with_a_malformed_parent():
+    broken = reply("1", parent_did=AUTHOR_DID, root_did=AUTHOR_DID)
+    broken["record"]["reply"]["parent"]["uri"] = "https://example.com/not-at-uri"
+
+    posts, skipped = bluesky.parse_search_posts({"posts": [broken, item("2")["post"]]})
+
+    assert [p.cid for p in posts] == ["bafy2"]
+    assert skipped == {"invalid": 1}
+
+
+@pytest.mark.parametrize("payload", [[], {}, {"posts": None}, {"feed": []}])
+def test_rejects_a_search_response_without_posts(payload):
+    with pytest.raises(ValueError):
+        bluesky.parse_search_posts(payload)
+
+
+def test_searches_the_latest_posts_with_the_hashtag_facet():
+    seen: list[httpx.Request] = []
+    client = client_answering(200, {"posts": [item()["post"]]}, seen)
+
+    posts, _ = bluesky.search_tag_posts(client, "python", limit=50)
+
+    assert len(posts) == 1
+    assert seen[0].url.path == "/xrpc/app.bsky.feed.searchPosts"
+    assert dict(seen[0].url.params) == {
+        "q": "#python",
+        "tag": "python",
+        "sort": "latest",
+        "limit": "50",
+    }
+
+
+def test_a_rejected_query_raises_subscription_rejected():
+    client = client_answering(400, {"error": "BadQueryString", "message": "bad"})
+
+    with pytest.raises(bluesky.SubscriptionRejected, match="BadQueryString"):
+        bluesky.search_tag_posts(client, "python", limit=50)
+
+
+def test_a_blocked_search_raises_search_forbidden():
+    # Bluesky's block answers with an HTML page, not JSON.
+    client = httpx.Client(
+        base_url="https://bsky.test",
+        transport=httpx.MockTransport(lambda request: httpx.Response(403, text="<html>403</html>")),
+    )
+
+    with pytest.raises(bluesky.SearchForbidden, match="HTTP 403"):
+        bluesky.search_tag_posts(client, "python", limit=50)
+
+
+# ----------------------------------------------------------------- login ---
+
+CREDENTIALS = bluesky.Credentials(identifier="me.bsky.social", app_password="abcd-efgh-ijkl-mnop")
+
+
+def session_body(pds: str | None = "https://morel.us-east.host.bsky.network") -> dict:
+    body = {"did": AUTHOR_DID, "handle": "me.bsky.social", "accessJwt": "access", "refreshJwt": "r"}
+    if pds is not None:
+        body["didDoc"] = {
+            "id": AUTHOR_DID,
+            "service": [
+                {
+                    "id": "#atproto_pds",
+                    "type": "AtprotoPersonalDataServer",
+                    "serviceEndpoint": pds,
+                }
+            ],
+        }
+    return body
+
+
+def test_login_posts_the_credentials_and_uses_the_account_pds():
+    seen: list[httpx.Request] = []
+    client = client_answering(200, session_body(), seen)
+
+    session = bluesky.create_session(client, CREDENTIALS)
+
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/xrpc/com.atproto.server.createSession"
+    assert json.loads(seen[0].content) == {
+        "identifier": "me.bsky.social",
+        "password": "abcd-efgh-ijkl-mnop",
+    }
+    assert session == bluesky.Session(
+        did=AUTHOR_DID,
+        pds_url="https://morel.us-east.host.bsky.network",
+        access_jwt="access",
+    )
+
+
+@pytest.mark.parametrize("pds", [None, "http://plain-http.example"])
+def test_login_falls_back_to_the_entryway_without_an_https_pds(pds):
+    client = client_answering(200, session_body(pds))
+
+    session = bluesky.create_session(client, CREDENTIALS)
+
+    assert session.pds_url == "https://bsky.test"
+
+
+@pytest.mark.parametrize("status", [400, 401])
+def test_rejected_credentials_raise_login_rejected(status):
+    body = {"error": "AuthenticationRequired", "message": "Invalid identifier or password"}
+    client = client_answering(status, body)
+
+    with pytest.raises(bluesky.LoginRejected, match="Invalid identifier or password"):
+        bluesky.create_session(client, CREDENTIALS)
+
+
+def test_secrets_never_appear_in_repr():
+    session = bluesky.Session(did=AUTHOR_DID, pds_url="https://pds.test", access_jwt="access")
+
+    assert "abcd-efgh-ijkl-mnop" not in repr(CREDENTIALS)
+    assert "access" not in repr(session)
+
+
+def test_an_authenticated_client_sends_the_bearer_token():
+    with bluesky.make_client("https://pds.test", access_jwt="access") as client:
+        assert client.headers["Authorization"] == "Bearer access"
+    with bluesky.make_client("https://pds.test") as client:
+        assert "Authorization" not in client.headers

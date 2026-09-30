@@ -33,8 +33,11 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 - **A5. "Local network only":** enforced with default-deny NetworkPolicies in
   every namespace. The analysis zone can reach only PostgreSQL, the cluster
   DNS and the local LLM, which is stricter than "the local network".
-- **A6. Hashtags:** Bluesky search requires an authenticated account. How the
-  credentials are provided is decided in step 6.
+- **A6. Hashtags:** Bluesky blocks unauthenticated search at times, to
+  reduce load. Credentials are optional: an app password in a git-ignored
+  `.env` becomes a Secret that only the hashtag ingestor mounts, and search
+  then always works. Without it, search runs unauthenticated while Bluesky
+  allows it, and a warning says how to add credentials when it does not.
 - **A7. Platform:** a local k3d cluster (k3s) stands in for an on-prem
   cluster; PostgreSQL is a single instance.
 - **A8. Freshness:** ingestion and summarisation run as periodic batch jobs
@@ -60,7 +63,14 @@ stores them in `posts`, linked to the subscription in `subscription_posts`.
 - Each subscription is stored in its own transaction.
 - An account Bluesky does not know gives a warning. A network or database
   error fails the Job, which is then visible in `kubectl get jobs`.
-- Hashtags: step 6.
+
+Hashtags use the same image with a different subcommand, as a separate
+CronJob (D20; deployed in step 6b). It searches the latest 50 posts with the
+tag and applies the same rule: no replies to other accounts.
+- With the optional credentials (A6), it logs in and searches through the
+  account's PDS.
+- Without them, it searches Bluesky's AppView directly. That works only
+  while Bluesky allows unauthenticated search.
 
 **Data model (migration `0001`, D16).** All tables are owned by `migrator`;
 the application roles only get what their zone needs:
@@ -288,3 +298,10 @@ same tarballs would be pushed there instead. See
 - **Replies to other accounts, with context:** they are excluded today
   because, without the post they answer, the LLM cannot interpret them
   (often sarcasm). Fetch the parent post and classify the pair (D18).
+- **Reuse the Bluesky session:** the hashtag ingestor logs in on every run,
+  and Bluesky allows 300 logins per day per account, which bounds how often
+  it can run. Keeping the refresh token between runs would lift that limit,
+  but needs writable storage in `ingest` or a long-running pod (D20).
+- **OAuth instead of an app password:** an app password can act as the
+  account, although the ingestor only reads. Bluesky's OAuth allows
+  narrower permissions (D20).
