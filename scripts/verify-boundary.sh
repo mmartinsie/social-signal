@@ -2,10 +2,12 @@
 # Prove the security boundary against the real NetworkPolicies. For each
 # component identity it starts a curl pod carrying that component's labels
 # (so exactly the same policies apply as to the real pods, whose images have
-# no curl), tries to reach the internet, PostgreSQL and the LLM, and compares
-# the outcome with what the policies should allow. An "outsider" pod in the
-# `default` namespace, which has no policies, checks the database's and the
-# LLM's own ingress rules. Prints a PASS/FAIL table; exits 1 on any FAIL.
+# no curl), tries to reach the internet, PostgreSQL, the LLM and the API, and
+# compares the outcome with what the policies should allow. An "outsider" pod
+# in the `default` namespace, which has no policies, checks the database's,
+# the LLM's and the API's own ingress rules. The API's one allowed client,
+# Traefik, is checked the way analysts reach it: from this host, through the
+# Ingress. Prints a PASS/FAIL table; exits 1 on any FAIL.
 #
 # Three kinds of check:
 #   dns      `nslookup` with a timeout: "resolves" or "no-dns".
@@ -32,7 +34,7 @@
 # SET LOCAL ROLE: every privilege is then checked as that role.
 #
 # Inputs (environment, set by the Makefile): KUBE_CONTEXT, CURL_IMAGE,
-# POSTGRES_IMAGE
+# POSTGRES_IMAGE; UI_URL optional, default http://localhost:8088
 # POSIX sh on purpose: it must run with both Linux and macOS userland.
 
 set -eu
@@ -46,6 +48,8 @@ PUBLIC_IP=https://1.1.1.1
 KUBE_API=https://kubernetes.default.svc
 POSTGRES=postgres.data.svc:5432
 LLM=llm.analysis.svc:8080
+API=api.analysis.svc:8000
+UI_URL=${UI_URL:-http://localhost:8088}
 DB_HOST=postgres.data.svc.cluster.local
 DB_NAME=socialsignal
 
@@ -261,6 +265,21 @@ check_tcp vb-worker analysis "$LLM" open
 check_tcp vb-api analysis "$LLM" blocked
 check_tcp vb-ingestor ingest "$LLM" blocked
 check_tcp vb-outsider default "$LLM" blocked
+# The API: only Traefik may reach it (D25). Not the internet-facing ingest
+# zone, not the worker in its own zone, not the outsider, whose own egress
+# is open, so its "blocked" comes from the API's ingress rule. The Service
+# selects the release's pods only, so these reach the real API pods.
+check_tcp vb-ingestor ingest "$API" blocked
+check_tcp vb-worker analysis "$API" blocked
+check_tcp vb-outsider default "$API" blocked
+# And the allowed path, as an analyst's browser takes it: this host, k3d's
+# load balancer, Traefik, the API.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$UI_URL/healthz" 2>/dev/null) || true
+case "$code" in
+  200) got=open ;;
+  *) got="blocked($code)" ;;
+esac
+record host "-" "$UI_URL/healthz (via Traefik)" open "$got"
 
 # Database privileges, per zone, with that zone's own credentials (D17).
 # Ingest zone: reads what to fetch and stores posts; nothing else.
