@@ -754,3 +754,15 @@ memory is trimmed so it does not duplicate them.
 - **The estimate for a build without cache** was built from measured parts
   (download speed, image sizes, the step 7a build times), labelled as an
   estimate, and rounded up to 30 minutes at the author's request.
+- **The zip, checked by extracting it:**
+  - the agent's first zip, written with Python's `zipfile`, left out empty
+    directories, and git did not recognise the extracted repository. The
+    agent found it in its own check, and added the directory entries;
+  - after the second extraction, git showed six scripts as modified. The
+    zip stored their 0755 mode, but Python's extraction does not restore
+    permissions, unlike `unzip` and macOS. Extracting with the stored modes
+    gave a clean `git status`;
+  - asked by the author, the agent showed that `.env` and the personal
+    notes had never been in any commit, so they were neither in the zip nor
+    on GitHub.
+

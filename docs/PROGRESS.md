@@ -14,8 +14,17 @@ _Last updated: 2026-10-01 (step 12)._
   and D3 were updated;
 - the README starts with a short summary, and its figures were refreshed.
 
-What remains: the submission zip, made from a fresh clone of the final
-commit, with its git history and without anything git-ignored.
+**The project is complete.** The submission zip (`socialsignal.zip`) is made
+from a fresh clone of the final commit, so it holds the repository with its
+git history and nothing git-ignored (no `.env`, no personal notes, no
+`dist/`):
+1. `git clone --no-local` of the final commit;
+2. in the clone, remove the remote and the reflog, which hold local paths;
+3. zip it with directory entries included (git needs some empty ones, such
+   as `.git/refs/heads`) and with the files' permissions (the scripts are
+   executable);
+4. check it by extracting it elsewhere: `git status` clean, `git fsck`
+   without errors, and the same tree as the final commit.
 
 **State of the cluster:** it runs from `~/social-signal-clean` (step 11), with
 `@bsky.app` and `#python` summarised. Keep that directory until the cluster
