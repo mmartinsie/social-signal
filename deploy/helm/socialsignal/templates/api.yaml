@@ -11,9 +11,19 @@ metadata:
     {{- include "socialsignal.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
-  # High availability for the analysts: PodDisruptionBudget, rolling update
-  # settings and spreading over nodes come in step 10.
+  # High availability for the analysts (D26): at least two replicas, on
+  # different nodes, never fewer than one during a drain (the PDB below),
+  # and never fewer than all of them during an update.
   replicas: {{ .Values.api.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Start one new pod, wait until it is ready, then stop one old pod.
+      maxSurge: 1
+      maxUnavailable: 0
+  # A new pod only counts as available after 5 s ready, so one that crashes
+  # right after starting does not let the update stop an old pod.
+  minReadySeconds: 5
   selector:
     matchLabels:
       app.kubernetes.io/component: api
@@ -28,6 +38,31 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- include "socialsignal.podSecurityContext" . | nindent 8 }}
+      # One pod per node at most, so losing a node never takes every
+      # replica. Cordoned nodes (a drain) are not counted (Honor), so the
+      # evicted pod can still be placed.
+      topologySpreadConstraints:
+        - topologyKey: kubernetes.io/hostname
+          maxSkew: 1
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: api
+              app.kubernetes.io/instance: {{ .Release.Name }}
+      # preStop (10 s) plus uvicorn's own graceful shutdown (15 s) must fit.
+      terminationGracePeriodSeconds: 30
+      # Every request opens a database connection, so it resolves
+      # PostgreSQL's name. An evicted CoreDNS pod stops at once (k3s'
+      # Corefile has no lameduck), and a query sent to it in that moment gets
+      # no answer: glibc would wait 5 s before retrying, longer than an
+      # analyst's patience. Retry after 1 s instead (measured, D26).
+      dnsConfig:
+        options:
+          - name: timeout
+            value: "1"
+          - name: attempts
+            value: "3"
       containers:
         - name: api
           image: {{ required "images.api is required (set by make start)" .Values.images.api }}
@@ -45,6 +80,14 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.ports.api }}
+          # Graceful shutdown (D26). A terminating pod leaves the Service at
+          # once, but Traefik learns it a moment later. Keep serving for
+          # 10 s, so no request is sent to a pod that already stopped; only
+          # then does uvicorn get SIGTERM and finish its requests in flight.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 10
           # Neither probe touches the database (D25): if PostgreSQL is down,
           # the pods stay ready and the page says what is wrong.
           readinessProbe:
@@ -117,3 +160,21 @@ spec:
                 name: api
                 port:
                   name: http
+---
+# Voluntary disruptions (a node drain, a cluster upgrade) may evict API
+# pods only while another one is ready (D26). With a single replica this
+# would block a drain forever, hence at least two.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: {{ .Values.api.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+      app.kubernetes.io/instance: {{ .Release.Name }}

@@ -1663,6 +1663,118 @@ worked stay untouched.
       touched;
     - `make verify-boundary` 31/31, and `make llm-smoke` 3/3.
 
+### D26. High availability and updates without downtime (step 10)
+
+The author asked to go ahead with step 10. The agent stated the plan
+before starting and changed it twice when measurements disproved it, as
+recorded below.
+
+- **Decision:**
+  - **The API:**
+    - **rolling update:** `maxSurge: 1`, `maxUnavailable: 0`,
+      `minReadySeconds: 5`;
+    - **spread:** a topology spread constraint over
+      `kubernetes.io/hostname`, `maxSkew: 1`, `DoNotSchedule`, with
+      `nodeTaintsPolicy: Honor`, so a cordoned node is not counted and the
+      evicted pod can still be placed;
+    - **PodDisruptionBudget** `minAvailable: 1` (a value, with 2 replicas);
+    - **graceful shutdown:** a `preStop` `sleep` action of 10 s (no binary
+      needed), then uvicorn's `timeout_graceful_shutdown` of 15 s;
+      `terminationGracePeriodSeconds: 30`;
+    - **DNS:** `dnsConfig` options `timeout:1` and `attempts:3`.
+  - **The platform on the analysts' path** (`deploy/platform/20-high-availability.yaml`):
+    - **Traefik:** a `HelmChartConfig`, k3s' supported way to override its
+      bundled chart, with 2 replicas, a PDB (`minAvailable: 1`), the same
+      spread constraint and a `preStop` of 10 s. k3s' Helm controller
+      applies it with a Job, from the chart k3s serves itself.
+    - **CoreDNS:** a PDB (`minAvailable: 1`), and `make start` scales it to
+      2. k3s owns that Deployment, but its manifest leaves the replica
+      count out, so k3s does not reset it; k3s' own spread constraint
+      places the two pods on different nodes.
+  - **Repeatable demos** (`scripts/ha-demo.sh`):
+    - `make demo-update` restarts the API's Deployment, the same rolling
+      update a new image triggers;
+    - `make demo-drain` drains a node that runs an API pod, never
+      PostgreSQL's, then uncordons it, also on failure or interruption;
+    - both send requests to the JSON API through Traefik from the host
+      several times per second, keep the load on until the old pods are
+      gone, print the failures per second, and exit 1 if any request
+      failed.
+- **What the measurements changed:**
+  1. **Two replicas everywhere were not enough.** The first drain, of a
+     node running an API, a Traefik and a CoreDNS pod, failed 86 of 356
+     requests.
+  2. **Ruled out, one test each, with probes on every node's port 80:**
+     cordoning alone (0 of 767 failed), creating and deleting a pod in
+     `ingest` (0 of 676), and deleting a finished Job's pod (0 of 367).
+     Draining a node without Traefik or CoreDNS: 0 failed.
+  3. **Found:** the failures started 1-2 s after the drain began, as
+     instant refusals on every node, `/readyz` included. `kubectl drain`
+     prints "evicted" when a pod is gone, not when its eviction starts, and
+     the Traefik and CoreDNS pods had started stopping just before the
+     failures. Traefik closes its listener on SIGTERM while kube-proxy
+     still sends it connections. **Fix:** Traefik's `preStop`. Next drain:
+     1 failure in 206.
+  4. **The last failure:** a request sent at the moment the CoreDNS pod
+     stopped (k3s' Corefile has no `lameduck`) timed out after 5 s, the
+     resolver's default before retrying. **Fix:** the API's 1 s DNS
+     timeout. Next drains: 0 failures.
+  5. **The demo itself was wrong at first:** it stopped the load as soon
+     as the rollout reported success, while an old pod was still in its
+     10 s pause, exactly when failures would happen. It now waits until
+     the old pods are gone.
+- **Alternatives:**
+  - **Traefik as a DaemonSet,** one per node. More pods than needed on a
+    larger cluster; two replicas and a PDB are enough.
+  - **Traefik's `requestAcceptGraceTimeout`** instead of a `preStop`. Same
+    effect inside Traefik; the `preStop` is the same mechanism as the API's,
+    so there is one idea to explain.
+  - **Patching CoreDNS** with a `preStop`, or editing its Corefile. k3s
+    owns both and says not to edit them; the retry is in our own chart.
+    NodeLocal DNSCache is the on-prem answer (open item).
+  - **A readiness endpoint that turns 503 on SIGTERM** instead of a pause.
+    The endpoint is removed from the Service as soon as the pod starts
+    terminating anyway; what is missing is time for every node and
+    Traefik to notice, which only a pause gives.
+  - **Pod anti-affinity** instead of a spread constraint. The same result
+    for one pod per node; the spread constraint also handles more replicas
+    than nodes.
+  - **Drain any node, PostgreSQL's included.** That is an outage of about
+    6 s by design until CloudNativePG (D14), so the demo avoids it and says
+    so.
+- **Why:** the brief asks for high availability for the analysts. The
+  measurements showed it depends on the whole path, not only on our
+  replicas.
+- **Trade-off:**
+  - Every API and Traefik pod takes 10 s longer to stop.
+  - CoreDNS's count is set imperatively by `make start`; k3s has no
+    declarative setting for it.
+  - A drain or an update stops running CronJob pods: that Job fails, and
+    the next run catches up.
+  - Each drain moves pods around; Kubernetes does not move them back after
+    an uncordon.
+  - Once, before Traefik's pause was added, a burst of 502s followed an
+    uncordon for 3 s. It did not appear again in five later drains and
+    rollouts, and it is not explained.
+- **Verified:**
+  - **Platform:** 2 CoreDNS and 2 Traefik pods on different nodes, and 3
+    PDBs (API, Traefik, CoreDNS), each allowing 1 disruption. Applying the
+    `HelmChartConfig` updated Traefik under load without a failed request.
+  - **Rolling updates:**
+    - the first, real `make start` of this step, with old pods that did
+      not have the pause yet: 1 of 1332 requests got a 502, when the last
+      old pod stopped;
+    - `make demo-update`: 359 of 359;
+    - a later `make start` with a new pod template: 901 of 901.
+  - **Drains:**
+    - a node with only an API pod: 190 of 190;
+    - the node with an API, a Traefik and a CoreDNS pod and the LLM: 237
+      of 237 in 36 s. The LLM moved and was ready again for
+      `make llm-smoke`.
+  - **Afterwards:** `make verify-boundary` 31/31, `make llm-smoke` 3/3.
+    The two worker runs stopped by drains ended `Failed`, and the next run
+    summarised `#python` again.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1803,6 +1915,12 @@ External facts the decisions above depend on.
 | AT Protocol handles: ASCII letters, digits and hyphens in at least two labels of 1-63 characters, the last starting with a letter, at most 253 characters, case-insensitive | atproto `packages/syntax/src/handle.ts` | 2026-10-01 |
 | A hashtag (`app.bsky.richtext.facet#tag`, and `searchPosts`' `tag`) has at most 64 graphemes and 640 bytes, without the `#` | Lexicons `app/bsky/richtext/facet.json`, `app/bsky/feed/searchPosts.json` | 2026-10-01 |
 | Starlette 1.7's `TestClient` warns that using `httpx` is deprecated in favour of `httpx2` (development only) | `uv run pytest` warning | 2026-10-01 |
+| Kubernetes v1.36 accepts the `preStop` `sleep` action (no binary in the image needed) | `kubectl apply --dry-run=server` of a pod (D26) | 2026-10-01 |
+| k3s' CoreDNS manifest leaves `replicas` out (also in the object k3s records as applied) and spreads pods by hostname; its Corefile's `health` has no `lameduck` and says "File managed by k3s. DO NOT EDIT." | `/var/lib/rancher/k3s/server/manifests/coredns.yaml`; the `objectset.rio.cattle.io/applied` annotation; the `coredns` ConfigMap | 2026-10-01 |
+| k3s' bundled Traefik chart (40.1.0) accepts `deployment.replicas`, `deployment.lifecycle`, `podDisruptionBudget` and `topologySpreadConstraints`; k3s applies a `HelmChartConfig` of the same name with a Helm Job | The chart served by k3s (`/static/charts/traefik-40.1.4+up40.1.0.tgz`); local test (D26) | 2026-10-01 |
+| Without a `preStop`, an evicted Traefik pod refuses new connections for 1-2 s while kube-proxy still routes to it; an evicted CoreDNS pod can leave a lookup unanswered until the resolver's 5 s retry | Drains under load with probes on every node (D26) | 2026-10-01 |
+| `kubectl drain` prints "evicting pod" when it starts and "pod/... evicted" only once the pod is gone | `kubectl drain` output (D26) | 2026-10-01 |
+| k3d's load balancer sends host port 8088 to port 80 of every node; Traefik's Service is a `LoadBalancer` with `externalTrafficPolicy: Cluster`, served on each node by k3s' `svclb` DaemonSet | `/etc/confd/values.yaml` in `k3d-socialsignal-serverlb`; the Service (D26) | 2026-10-01 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

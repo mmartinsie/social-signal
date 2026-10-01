@@ -1,6 +1,7 @@
 #!/bin/sh
 # Start the local k3d cluster from the offline image bundle and apply the
-# platform layer (namespaces and default-deny NetworkPolicies). It never pulls
+# platform layer (namespaces, default-deny NetworkPolicies, and two CoreDNS
+# and Traefik pods for high availability). It never pulls
 # from a registry: if the bundle is missing it stops and asks for
 # `make build`. Safe to re-run: it creates, starts or leaves the cluster as
 # needed.
@@ -139,8 +140,26 @@ for deployment in coredns traefik; do
   $kubectl -n kube-system rollout status "deployment/$deployment" --timeout=600s
 done
 
-# --- 7. Platform layer: namespaces and default-deny NetworkPolicies ---------
+# --- 7. Platform layer: namespaces, default-deny, high availability ---------
 $kubectl apply -f "$PLATFORM_DIR"
+
+# --- 8. Two CoreDNS and two Traefik pods, on different nodes (D26) ----------
+# Must match deploy/platform/20-high-availability.yaml. k3s' manifest for
+# CoreDNS leaves the replica count out, so k3s does not manage it, and this
+# sets it again on every start anyway. Traefik's
+# count comes from the HelmChartConfig, applied by a k3s Helm Job: wait
+# until that Job has changed the Deployment, then until both pods run.
+HA_REPLICAS=2
+$kubectl -n kube-system scale deployment/coredns --replicas="$HA_REPLICAS" >/dev/null
+tries=0
+until [ "$($kubectl -n kube-system get deployment traefik -o jsonpath='{.spec.replicas}')" = "$HA_REPLICAS" ]; do
+  tries=$((tries + 1))
+  [ "$tries" -le 150 ] || fail "Traefik was not scaled to $HA_REPLICAS replicas after 5 minutes."
+  sleep 2
+done
+for deployment in coredns traefik; do
+  $kubectl -n kube-system rollout status "deployment/$deployment" --timeout=300s
+done
 
 echo
 echo "Cluster $CLUSTER is up (kubectl context: $KUBE_CONTEXT)."

@@ -660,3 +660,39 @@ memory is trimmed so it does not duplicate them.
 - **Not done, recorded for later:** that check of the API's ingress is
   not in `verify-boundary` yet; the agent left the script unchanged and
   listed it as a follow-up.
+
+### Step 10: high availability and updates without downtime (session 3)
+
+- **Author decided:** "do step 10". The agent wrote its plan in the chat
+  before changing anything, then carried it out.
+- **The agent widened the scope, and said why:** before writing anything
+  it traced the analysts' path in the cluster and found that Traefik and
+  CoreDNS, both k3s defaults, ran one pod each, so two API replicas alone
+  would not survive a drain. It made both highly available with k3s'
+  supported mechanisms (a `HelmChartConfig`; scaling a count k3s leaves
+  out of its manifest, checked in k3s' recorded object).
+- **Verified before writing:** the `preStop` sleep action against the API
+  server (dry run), the bundled Traefik chart's values (read from the chart
+  k3s serves), and uvicorn's shutdown code.
+- **The first drain demo failed (86 of 356), and the agent investigated
+  instead of retrying.** It formed hypotheses and tested each with probes
+  on every node's port 80:
+  - cordoning alone, creating and deleting pods, deleting a finished Job's
+    pod: none failed, so those were ruled out;
+  - it noticed that `kubectl drain` reports "evicted" only once a pod is
+    gone, which had misled its first reading of the timeline;
+  - it found Traefik closing its listener on SIGTERM, and fixed it with a
+    `preStop`;
+  - it traced the last failure to a CoreDNS pod stopping at once, and
+    added a DNS retry to the API instead of editing k3s' own CoreDNS.
+  Each fix was measured: 86 → 1 → 0 failures.
+- **Agent mistake, found by itself:** the first version of the demo
+  stopped the load before the old pods had finished stopping, which is
+  exactly when failures happen. It fixed the script and re-ran the demo.
+- **A hypothesis withdrawn:** it first suspected node updates triggering a
+  network policy resync; a cordon-only test disproved it.
+- **One observation left unexplained and documented:** a 3 s burst of 502s
+  after an uncordon, seen once before Traefik's fix and not again.
+- **Side finding:** the machine's clock jumped by about six hours during
+  the step, probably a suspend; the agent noted it so that the logs' times
+  are not misread.

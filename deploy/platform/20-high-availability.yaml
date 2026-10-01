@@ -1,0 +1,54 @@
+# High availability of the platform on the analysts' path (D26). Every
+# request to the UI goes through Traefik, and every new database
+# connection from the API needs CoreDNS to resolve PostgreSQL's name. k3s
+# runs one pod of each, so a single node drain would cut the UI even with
+# two API replicas.
+#
+# Traefik: k3s installs it with its Helm controller, and a HelmChartConfig
+# of the same name is the supported way to override its chart values. The
+# controller re-runs the install as a Job, from the chart k3s serves itself:
+# nothing is downloaded. Two replicas, one per node, and a PDB.
+#
+# preStop: Traefik closes its listener as soon as it gets SIGTERM, while
+# kube-proxy on every node still sends it new connections for a moment:
+# draining a node with a Traefik pod refused requests for 1-2 s (measured).
+# Like the API, keep serving for 10 s before the signal.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    deployment:
+      replicas: 2
+      lifecycle:
+        preStop:
+          sleep:
+            seconds: 10
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    topologySpreadConstraints:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+            app.kubernetes.io/instance: traefik-kube-system
+        maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        nodeTaintsPolicy: Honor
+---
+# CoreDNS: k3s owns its Deployment but not its replica count, which
+# scripts/cluster-up.sh sets to 2; k3s' own spread constraint already puts
+# them on different nodes. This PDB keeps one running during a drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns

@@ -42,6 +42,9 @@ def main() -> None:
         proxy_headers=True,
         forwarded_allow_ips="*",
         log_config=None,
+        # On SIGTERM, after the pod's preStop pause (D26): stop accepting
+        # connections and give requests in flight up to 15 s to finish.
+        timeout_graceful_shutdown=15,
     )
 
 

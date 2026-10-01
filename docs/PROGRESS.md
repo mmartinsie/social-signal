@@ -1,43 +1,36 @@
 # Progress
 
-_Last updated: 2026-10-01 (step 9)._
+_Last updated: 2026-10-01 (step 10)._
 
 ## Current step
 
-**Step 9: the API and the minimal UI (D25).** Done, in one go at the
-author's request, with every recommended decision:
-- `api` Deployment (2 replicas), Service and Traefik Ingress in
-  `analysis`: the UI at <http://localhost:8088>, plus a small JSON API;
-- a page rendered on the server, with no JavaScript and no external
-  assets; every state is explained (pending, being analysed, no recent
-  posts, no sentence);
-- probes that never touch the database; writes from another origin
-  refused; Jinja2 escapes the LLM's sentence;
-- 52 new unit tests (148 in total);
-- end to end in the cluster: subscribed `@AtProto.com` through the form,
-  saw it go from pending to a summary in about 3 minutes, then
-  unsubscribed;
-- with PostgreSQL scaled to 0, the page said so with a 503, the pods stayed
-  ready, and the API recovered on its own;
-- what must stay untouched was checked: NetworkPolicies, the database
-  chart, the migration, the platform, the other services, the LLM image
-  and `.env` are unchanged; `verify-boundary` 31/31 and `llm-smoke` 3/3.
+**Step 10: high availability and updates without downtime (D26).** Done:
+- **API:** rolling update (`maxSurge 1`, `maxUnavailable 0`), one pod per
+  node, a PDB, a 10 s `preStop` pause plus uvicorn's graceful shutdown,
+  and a 1 s DNS retry;
+- **platform:** two Traefik pods (a k3s `HelmChartConfig`, with a pause
+  too) and two CoreDNS pods, each with a PDB;
+- **demos:** `make demo-update` and `make demo-drain`, under load from the
+  host, failing on any failed request;
+- **measured:** the first drain failed 86 of 356 requests. The agent found
+  two causes, Traefik stopping at once and CoreDNS stopping at once, and
+  fixed them. Then: a rolling update 359 of 359, a `make start` 901 of 901,
+  and a drain of the node with an API, a Traefik and a CoreDNS pod and the
+  LLM, 237 of 237;
+- `verify-boundary` 31/31, `llm-smoke` 3/3.
 
-Next: **step 10**, high availability and zero-downtime updates:
-PodDisruptionBudget, rolling update with `maxUnavailable: 0`, spreading
-the API over nodes, graceful shutdown, and a demo of an update and of a
-node drain without downtime.
+Next: **step 11**, `make build` and `make start` from a clean clone.
 
 **State of the cluster:**
-- The UI shows `@bsky.app` (1 post, positive) and `#python` (50 posts,
-  neutral), with sentences. `@atproto.com` was subscribed and then
-  unsubscribed in the test; its posts and labels stay in the database.
-- The API runs 2 replicas, on different nodes; the LLM runs on one node,
-  and its image is present on all three.
+- The UI shows `@bsky.app` and `#python`, with sentences.
+- After the drains, the pods are spread differently than before, and two
+  worker Jobs show `Failed` (stopped by drains); the next runs succeeded.
 - The demo subscriptions stay until they are no longer needed (author's
   decision). With the author's `.env`, `ingestor-hashtags` logs in to
   Bluesky every 20 minutes while the cluster runs (72 of the account's 300
   daily logins). `make stop` stops it.
+- The machine's clock jumped from about 01:00 to 07:00 UTC during this
+  step (probably a suspend); the logs' times reflect it.
 
 ## Steps
 
@@ -60,7 +53,7 @@ node drain without downtime.
 | 7b | LLM in the cluster, boundary checks, smoke test | Done (2026-10-01) |
 | 8 | Summary worker: code and tests, image and CronJob, LLM sentence | Done (2026-10-01) |
 | 9 | API and minimal UI, behind Traefik | Done (2026-10-01) |
-| 10 | High availability and zero-downtime updates | Pending |
+| 10 | High availability and zero-downtime updates, with drain and update demos | Done (2026-10-01) |
 | 11 | `make build` and `make start` from a clean clone | Pending |
 | 12 | Final documentation and zip review | Pending |
 
@@ -68,22 +61,14 @@ node drain without downtime.
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Step 10: the API's probes check only the process (D25). For a rolling
-  update without errors, add a graceful shutdown: on SIGTERM, `/readyz`
-  should fail first (or a `preStop` sleep) so Traefik stops sending
-  requests before uvicorn stops.
-- Step 10: the two API replicas landed on different nodes by chance; add a
-  topology spread constraint or anti-affinity.
-- Step 10: the LLM image is on every node, so the LLM can be rescheduled
-  when its node is drained. Expect about 40 s without classification while
-  the model loads (D23). The worker then fails one run and recovers on
-  the next (D24).
-- Step 10: the `local-path` volume pins PostgreSQL to one node. For the
-  drain demo, drain a node that does *not* host `postgres-0`, or explain the
-  outage (D14). While PostgreSQL is down, the UI answers 503 and says so
-  (D25).
-- Step 10 or 12: add the API's ingress checks to `make verify-boundary`
+- Step 11: from a clean clone, `make build` then `make start`. Check that
+  the platform's high availability comes up on a new cluster (the Traefik
+  `HelmChartConfig` and the CoreDNS scaling in `cluster-up.sh`), and run
+  both demos there.
+- Step 11 or 12: add the API's ingress checks to `make verify-boundary`
   (only Traefik reaches it; tested by hand in step 9).
+- Step 12: the README's measured times (first start, imports) predate the
+  platform changes; re-measure them in step 11.
 
 ## How to resume
 
@@ -109,4 +94,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
 | 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 / 10-01 | 5a-9 | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 / 10-01 | 5a-10 | *TBD* | Session 3 (WSL, new conversation) |

@@ -88,7 +88,8 @@ bundle is missing. The cluster is configured so it cannot pull images from
 any registry. `make start` then:
 
 1. creates the namespaces `ingest`, `data` and `analysis`, with a
-   default-deny NetworkPolicy in each;
+   default-deny NetworkPolicy in each, and runs two pods of Traefik and of
+   CoreDNS (k3s runs one of each), so the UI survives losing a node;
 2. generates random database passwords as Kubernetes Secrets, one per zone,
    so each zone only holds its own;
 3. turns the optional Bluesky credentials in `.env` into a Secret in
@@ -220,6 +221,25 @@ policies apply to them as to the real pods, plus an "outsider" pod in
 It prints a PASS/FAIL table, deletes the pods, and exits non-zero if any
 check fails.
 
+### Updates and node drains without downtime
+
+```sh
+make demo-update   # replace every API pod, as a new image does (about 1 minute)
+make demo-drain    # drain a node running an API pod, then uncordon it (about 1 minute)
+```
+
+Each one sends requests to the JSON API through Traefik, from your machine,
+several times per second, while it disrupts the cluster, and keeps going
+until the old pods are gone. It then prints how many requests failed and
+exits non-zero if any did. Expected: `No request failed: zero downtime.`
+
+- The drain picks a node that runs an API pod but not PostgreSQL, which is a
+  single instance; moving it would be an outage (see `DESIGN.md`). It
+  always uncordons the node, also if interrupted.
+- If the LLM runs on the drained node, it moves to another one and reloads
+  in about 40 s. A worker run stopped by the drain shows as `Failed`; the
+  next one catches up.
+
 ### Check the LLM
 
 ```sh
@@ -283,7 +303,8 @@ be downloaded again.
 Inside `deploy/`:
 
 - `k3d/`: the cluster configuration.
-- `platform/`: the namespaces and default-deny policies.
+- `platform/`: the namespaces, the default-deny policies, and two Traefik
+  and CoreDNS pods with their PodDisruptionBudgets.
 - `helm/socialsignal-db/`: PostgreSQL (its own release, installed first).
 - `helm/socialsignal/`: the application chart: the per-component
   NetworkPolicies, the migration Job, the two ingestor CronJobs, the LLM,

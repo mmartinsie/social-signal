@@ -307,8 +307,37 @@ is where high availability matters.
 - Each request opens its own database connection, so the API recovers on
   its own once PostgreSQL is back (tested: within seconds, no restart).
 
-*PodDisruptionBudget, rolling update settings, spreading over nodes and
-the node drain demo: TBD (step 10).*
+**The analysts' path survives losing a node (D26).** A request goes
+through k3d's load balancer, Traefik, the API, CoreDNS (to resolve
+PostgreSQL's name) and PostgreSQL. Everything on that path except
+PostgreSQL now runs twice, on different nodes:
+
+| Component | Replicas | Spread | PodDisruptionBudget | Graceful shutdown |
+|---|---|---|---|---|
+| API | 2 | one per node (required) | `minAvailable: 1` | `preStop` 10 s, then uvicorn finishes requests in flight (15 s) |
+| Traefik (k3s) | 2, via a `HelmChartConfig` | one per node (required) | `minAvailable: 1` | `preStop` 10 s |
+| CoreDNS (k3s) | 2, set by `make start` | k3s' own constraint | `minAvailable: 1` | none (k3s' Corefile); the API retries a lookup after 1 s |
+| PostgreSQL | 1 (D14) | n/a | none | n/a |
+
+- **Why each piece was needed (measured with `make demo-drain`):**
+  - **Two replicas of everything, but no pause for Traefik and no DNS
+    retry:** a drain of a node running an API, a Traefik and a CoreDNS pod
+    failed 86 of 356 requests in the first run, and 15 of 1724 in a
+    finer-grained repeat.
+  - **Traefik's `preStop`:** Traefik closes its listener as soon as it gets
+    SIGTERM, while kube-proxy still sends it new connections for a moment.
+    Without the pause, connections were refused for 1-2 s.
+  - **The API's DNS retry:** an evicted CoreDNS pod stops at once, and a
+    lookup sent to it in that moment waits 5 s for a retry. One request
+    timed out. With a 1 s timeout, none did.
+- **Result:** draining the node that ran an API pod, a Traefik pod, a
+  CoreDNS pod and the LLM: 237 requests in 36 s, 0 failed.
+- **Not covered:**
+  - PostgreSQL: draining its node is an outage, by design for now (D14).
+  - k3d's load balancer is one container on the host; on-prem, an external
+    load balancer or a virtual IP takes its place.
+  - The LLM moves to another node and reloads in about 40 s; one worker
+    run fails, and the next one catches up.
 
 ## 7. Continuous updates
 
@@ -344,7 +373,25 @@ fails, Helm aborts the upgrade and the previous version keeps running; this
 was tested by forcing a failure. Rollbacks do not undo migrations, so every
 migration must be backward compatible (expand/contract).
 
-*Application rolling updates: TBD (step 10).*
+**Rolling updates without downtime (D26).** `make build` gives a changed
+image a new tag; `make start` runs the migrations, then updates the
+Deployments.
+- **The API:** `maxSurge: 1`, `maxUnavailable: 0` and `minReadySeconds: 5`.
+  A new pod must be ready for 5 s before an old one stops, and an old pod
+  keeps serving for 10 s after it leaves the Service, so Traefik stops
+  sending it requests before uvicorn shuts down.
+- **Measured:**
+  - `make demo-update` replaces both pods under load: 359 requests, 0
+    failed;
+  - a real `make start` with a changed pod template, under load: 901
+    requests, 0 failed;
+  - the one rollout whose old pods did not have the pause yet: 1 request
+    in 1332 got a 502, when the last old pod stopped.
+- **The CronJobs** pick up a new image at their next run. A drain or an
+  update that stops a run halfway fails that Job, and the next run
+  continues (labels already stored are kept).
+- **The LLM** uses `Recreate` (D23): an update pauses classification for
+  about 40 s, never the UI.
 
 ## 8. Delivery to isolated environments
 
@@ -437,6 +484,15 @@ same tarballs would be pushed there instead. See
 - **A database connection pool for the API:** one connection per request
   is enough for an analysts' UI. A pool would save a few milliseconds per
   request under heavier traffic (D25).
+- **Graceful DNS:** CoreDNS stops at once when evicted, because k3s'
+  Corefile has no `lameduck`; the API compensates with a 1 s DNS retry
+  (D26). On-prem: CoreDNS with `lameduck`, or NodeLocal DNSCache on every
+  node.
+- **A highly available entry point:** k3d's load balancer is a single
+  container on the host. On-prem, put an external load balancer, or a
+  virtual IP (keepalived, kube-vip, MetalLB), in front of the nodes (D26).
+- **Run the zero-downtime demos in CI** for every change of the API or the
+  chart, and fail the pipeline on any failed request (D26).
 - **Show when the worker last ran:** `updated_at` is when a summary was
   generated, so a quiet handle shows an old date even when everything
   works. Recording each successful run would let the UI tell "no new

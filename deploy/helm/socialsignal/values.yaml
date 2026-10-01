@@ -125,9 +125,10 @@ worker:
 
 # The analysts' API and UI (D25), behind Traefik on http://localhost:8088.
 api:
-  # At least two, so one pod can be lost or replaced while the other
-  # serves (step 10 adds the PodDisruptionBudget and the update strategy).
+  # At least two, so one pod can be lost or replaced while the other serves
+  # (D26). Keep replicas above minAvailable, or a drain blocks forever.
   replicas: 2
+  minAvailable: 1
   ingressClassName: traefik
   resources:
     requests:
