@@ -3,8 +3,17 @@
 On-premises sentiment analysis of Bluesky handles and hashtags, running on
 Kubernetes with a small local LLM.
 
-> Work in progress: see [`docs/PROGRESS.md`](docs/PROGRESS.md) for the current
-> state.
+**In short:**
+
+```sh
+make build             # once, with internet access (up to 30 minutes)
+make start             # about 23 minutes the first time, 1 minute later on
+# then open http://localhost:8088 in a browser
+```
+
+`make verify-boundary`, `make demo-update` and `make demo-drain` then prove
+the security boundary and the updates without downtime. The design, and why
+each choice was made, are in [`DESIGN.md`](DESIGN.md).
 
 ## Prerequisites
 
@@ -30,9 +39,10 @@ Machine resources, measured on the development machine (WSL2 with 10 GB of
 memory, an HDD):
 
 - **Memory:** Docker needs at least 8 GB. The LLM pod alone uses about
-  3.5 GiB; the whole cluster ran with 6 GiB of the 10 GB still available.
+  3.5 GiB; with the whole system running, about 5 GB of the 10 GB stayed
+  available.
 - **Disk:** about 60 GB free:
-  - the bundle, 3.8 GB, plus the model, 3.4 GB;
+  - the bundle, about 4 GB, plus the model, 3.4 GB;
   - Docker's copies of our images, about 9 GB;
   - the three k3d nodes, about 26 GB, because each one holds the LLM image;
   - Docker's build cache, which `docker builder prune` can reclaim.
@@ -65,14 +75,19 @@ Hugging Face. It does three things:
      (`docker/llm.Dockerfile`, non-root), so nothing is downloaded at
      runtime.
 
-The bundle is about 3.8 GB, 3.5 GB of it the LLM image. From a clean clone
+The bundle is about 4 GB, 3.5 GB of it the LLM image. From a clean clone
 on the development machine (HDD), `make build` took 12.5 minutes: 1.5 for
 the third-party images, 4.5 to download the model, 1.5 for our Python
 images and 5 to build and save the LLM image. Docker's build cache was warm
-there; on a machine that never built these images, expect several more
-minutes. `make start` then runs everything from the bundle without pulling
-anything. Running `make build` again skips whatever is already downloaded,
-and an unchanged image keeps its tag.
+there. **On a machine that never built these images, allow up to 30
+minutes** with an HDD and a connection of 50 Mbit/s or more (an estimate
+from the measured parts, not measured end to end). It downloads about
+4.2 GB, 3.35 GB of them the model, so a slower connection takes longer;
+an SSD makes compressing and saving the LLM image much faster.
+
+`make start` then runs everything from the bundle without pulling anything.
+Running `make build` again skips whatever is already downloaded, and an
+unchanged image keeps its tag.
 
 `make build ARCH=arm64` (or `ARCH=amd64`) prepares the bundle for another
 architecture. Third-party images are simply downloaded for it, but building
@@ -147,9 +162,9 @@ credentials. To make hashtag search always work:
 `.env` is git-ignored and never copied into an image. Only the hashtag
 ingestor mounts the resulting Secret. To change or revoke the password, edit
 `.env` (or empty it) and run `make start` again: the Secret is replaced (or
-deleted) within a minute. With credentials, each hashtag run
-logs in once, and Bluesky allows 300 logins per day per account: the
-20-minute schedule uses 72.
+deleted) within a minute. With credentials, each hashtag run logs in once,
+and Bluesky allows 300 logins per day per account: the 20-minute schedule
+uses 72.
 
 ## Use it
 
@@ -211,7 +226,7 @@ make verify-boundary
 ```
 
 Proves the security boundary against the real NetworkPolicies and database
-grants, in about 45 seconds (31 checks). It starts temporary pods that carry
+grants, in about a minute (35 checks). It starts temporary pods that carry
 the labels of each component (ingestor, API, worker, LLM), so the same
 policies apply to them as to the real pods, plus an "outsider" pod in
 `default`. It then checks that:
@@ -224,6 +239,9 @@ policies apply to them as to the real pods, plus an "outsider" pod in
   not from the LLM or from the outsider pod;
 - the LLM is reachable only from the worker: not from the API, the
   ingestor or the outsider pod;
+- the API is reachable only through Traefik: from your machine, through
+  `http://localhost:8088`, but not from the ingestor, the worker or the
+  outsider pod;
 - each zone, logged in with its own credentials, can do exactly what its
   database role needs and gets `permission denied` for the rest. Every
   database check is rolled back, so it leaves no data behind.
@@ -290,7 +308,7 @@ be downloaded again.
 
 ```
 .
-├── Makefile                 # build / start / stop / clean / verify-boundary
+├── Makefile                 # build, start, stop, clean, verify-boundary, demos
 ├── pyproject.toml, uv.lock  # uv workspace (Python 3.12)
 ├── packages/
 │   └── common/              # shared settings and database access
@@ -325,8 +343,15 @@ image bundle, and `dist/models/`, the LLM weights.
 
 ## Documentation
 
-- [`DESIGN.md`](DESIGN.md): design, assumptions and open items.
+- [`DESIGN.md`](DESIGN.md): architecture, assumptions, key decisions, the
+  security boundary, high availability, updates, delivery to isolated
+  sites, how AI agents were used, time spent and open items.
 - [`docs/DECISIONS.md`](docs/DECISIONS.md): every decision with its
-  alternatives and trade-offs.
-- [`docs/PROGRESS.md`](docs/PROGRESS.md): current step and how to resume.
-- [`docs/AI_USAGE.md`](docs/AI_USAGE.md): how AI agents were used.
+  alternatives, trade-offs and what was verified, plus the table of
+  verified external facts.
+- [`docs/AI_USAGE.md`](docs/AI_USAGE.md): how AI agents were used, step by
+  step.
+- [`docs/PROGRESS.md`](docs/PROGRESS.md): the steps, their state and how to
+  resume work.
+- [`BRIEF.md`](BRIEF.md): the assignment. [`CLAUDE.md`](CLAUDE.md): the
+  working rules given to the AI agent.

@@ -18,7 +18,9 @@ This file is only about the *development* process.
     (Ubuntu 24.04). From step 2.
   - Session 3: the same setup, in a new conversation after clearing the
     context. The agent resumed from `CLAUDE.md`, `PROGRESS.md`,
-    `DECISIONS.md` and the code. From step 5.
+    `DECISIONS.md` and the code. From step 5. Halfway through, the
+    conversation's context was compacted into a summary, and the agent
+    carried on from it and from the repository's documents.
 - Commits written with the agent carry a
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer.
 
@@ -726,3 +728,29 @@ memory is trimmed so it does not duplicate them.
     only), and confirmed the login.
   The design held: the value never reached git, an image, a log or Helm.
   The leak came from how the agent inspected it.
+
+### Step 12: final documentation and review (session 3)
+
+- **Author decided:**
+  - the time spent: about 6 hours of active work, the gaps between commits
+    being breaks;
+  - the zip includes the git history;
+  - add the API's ingress checks to `verify-boundary`, test them and
+    document them, rather than leave them as an open item;
+  - review the 17 decisions the agent drafted in step 2, from a one-line
+    table in Spanish that the agent prepared. The author kept A1 as it was,
+    asked for A3 to be rewritten, A5 and D3 extended, A10 completed with its
+    outcome and D2 renamed, then approved the rest. The table was saved in
+    a git-ignored personal file, at the author's request.
+- **The new checks were tested for failure too:** a temporary policy
+  opened the API to everyone and the host check pointed at a wrong port.
+  Exactly the two expected checks failed, and the ingestor and worker
+  checks stayed green, blocked by their own egress, as predicted.
+- **Re-read before publishing:** the agent re-read the README and DESIGN
+  end to end. It found an outdated degraded-mode description, an
+  understated count of verified facts ("sixty", in fact 84), stale memory
+  and bundle figures, and a macOS-only `open` command in the quick start,
+  and fixed them.
+- **The estimate for a build without cache** was built from measured parts
+  (download speed, image sizes, the step 7a build times), labelled as an
+  estimate, and rounded up to 30 minutes at the author's request.

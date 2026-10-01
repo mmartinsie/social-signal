@@ -1,7 +1,8 @@
 # SocialSignal: design
 
-> Work in progress. Sections marked *TBD* are written as the corresponding
-> step is implemented (see [`docs/PROGRESS.md`](docs/PROGRESS.md)).
+> The full record of every decision, with the alternatives considered, the
+> trade-offs and the facts verified, is in
+> [`docs/DECISIONS.md`](docs/DECISIONS.md). A*n* and D*n* refer to it.
 
 ## 1. Overview
 
@@ -29,11 +30,13 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 - **A2. "Recent":** the last 50 posts from the last 7 days (configurable).
 - **A3. Summary:** dominant label (positive / neutral / negative), counts per
   label and one LLM-generated sentence, plus the item count and the last
-  update time. If the LLM fails, only the label and counts are shown and the
-  previous update time is kept.
+  update time.
   - **A tie is `neutral`**, in any combination of labels.
   - **The update time is when the summary was generated:** it changes only
     when the summary's posts change.
+  - **Degraded mode:** with the LLM down, nothing is rewritten and the last
+    summary is shown with its date. If only the sentence fails, the label
+    and counts are updated without it.
 - **A4. Users:** no login; all analysts share one subscription list.
 - **A5. "Local network only":** enforced with default-deny NetworkPolicies in
   every namespace. The analysis zone can reach only PostgreSQL, the cluster
@@ -51,13 +54,51 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 - **A9. Classification:** each post is classified once and the result is
   stored.
 - **A10. Priorities:** an end-to-end slice first. If time runs out, the cuts
-  are, in order: the LLM sentence, the node-drain demo, hashtags.
+  are, in order: the LLM sentence, the node-drain demo, hashtags. In the
+  end nothing was cut.
 - **A11. Tooling:** developed on Linux (WSL2) with LF line endings; the
   Makefile stays portable to macOS.
 
 ## 3. Architecture
 
-*Components and flows: TBD.*
+```
+  Analysts' browsers, on the local network
+               │  http://localhost:8088
+               ▼
+  k3d load balancer, then Traefik ×2 (kube-system)
+               │  only Traefik may reach the API
+┌──────────────▼─ analysis: no internet ─────────────────────────┐
+│ API ×2       FastAPI: the UI and a JSON API                    │
+│ worker       CronJob, every 5 min ──► LLM ×1: llama.cpp with   │
+│                                       Gemma 4 E2B, no egress   │
+└──────────────┬─────────────────────────────────────────────────┘
+               │  SQL as "analysis": manage subscriptions, read posts,
+               │  write labels and summaries
+┌──────────────▼─ data ──────────────────────────────────────────┐
+│ PostgreSQL ×1: the only bridge between the zones               │
+└──────────────▲─────────────────────────────────────────────────┘
+               │  SQL as "ingestor": read subscriptions, insert posts
+               │  and links, nothing else
+┌──────────────┴─ ingest: HTTPS to the internet only ────────────┐
+│ ingestor-handles    CronJob, every 5 min                       │
+│ ingestor-hashtags   CronJob, every 20 min, optional login      │
+│ Never private ranges: not the LAN, nodes or Kubernetes API     │
+└──────────────┬─────────────────────────────────────────────────┘
+               ▼
+  Bluesky's public API
+```
+
+**The flow:**
+1. An analyst subscribes in the UI; the API stores the subscription.
+2. The ingestors read the subscriptions, fetch the latest posts from
+   Bluesky and store them.
+3. The worker classifies each new post once with the local LLM, then writes
+   one summary per subscription.
+4. The UI shows the precomputed summaries. It never waits for the LLM, so it
+   keeps answering while the LLM is down.
+
+The zones never talk to each other directly: they meet only in PostgreSQL,
+each with its own role and only the grants its flow needs.
 
 **Ingestion (D18, D19).** A CronJob in `ingest` runs every 5 minutes. For
 each handle subscription it reads the account's latest 50 items from
@@ -134,8 +175,23 @@ the application roles only get what their zone needs:
 
 ## 4. Key decisions
 
-Summarised here once implemented; the full record is in
+The full record, with alternatives and trade-offs, is in
 [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+| Area | Decision | Why | Ref. |
+|---|---|---|---|
+| Model | Gemma 4 E2B (Google's QAT Q4_0 GGUF) on llama.cpp's server, weights inside the image, labels constrained by a JSON schema | The smallest real variant ("A2B" does not exist); runs on CPU, amd64 and arm64; nothing downloaded at runtime; always a valid label | A1, D22 |
+| Security boundary | Three namespaces with default-deny, plus one allow rule per component; proved by `make verify-boundary` (35 checks, and a mutation test) | Enforced by the infrastructure, as the brief requires, and testable | A5, D12 |
+| Data | PostgreSQL as the only bridge between zones; one role per zone; the ingestor can only insert | Least privilege in the network and in the database | D1, D17 |
+| Ingestion | Two CronJobs (handles every 5 minutes, hashtags every 20), idempotent by post URI; optional Bluesky login | Polling fits the API; the secret lives only in `ingest` | A6, A8, D18-D21 |
+| Classification | Each post classified once, in the analysis zone, by a worker CronJob with a time budget | The LLM on CPU is the bottleneck | A9, D24 |
+| Summary | Dominant label (`neutral` on a tie), counts, number of posts, one LLM sentence, `updated_at` | Deterministic and auditable, with a readable sentence | A3 |
+| UI and API | FastAPI, rendered on the server, no JavaScript, everything escaped; writes from another origin refused; probes that never touch the database | Works offline; safe with untrusted text; honest errors | D25 |
+| High availability | API ×2, one per node, PDB and graceful shutdown; Traefik ×2 and CoreDNS ×2 | The analysts' whole path survives a node drain: 0 failed requests, measured | D26 |
+| Updates | Images tagged by content; migrations as a Helm hook before every release; rolling updates with `maxUnavailable: 0` | A change always rolls out, the schema first, without downtime | D15, D16, D26 |
+| Delivery | Offline bundle of pinned images; a cluster that cannot pull | Ready for isolated sites, and checkable on a connected laptop | D4, D9 |
+| Platform | k3d (k3s, 1 server and 2 agents); PostgreSQL as one instance | k3s enforces NetworkPolicies and runs on premises; CloudNativePG is an open item | A7, D14 |
+| Credentials | Database passwords generated in the cluster by `make start`; the Bluesky password from a git-ignored `.env`, created with `kubectl create` | No secret in git, Helm or an image | D13, D21 |
 
 ## 5. Security boundary
 
@@ -188,12 +244,20 @@ PASS  worker    analysis   tcp llm.analysis.svc:8080                  expected o
 PASS  api       analysis   tcp llm.analysis.svc:8080                  expected blocked
 PASS  ingestor  ingest     tcp llm.analysis.svc:8080                  expected blocked
 PASS  outsider  default    tcp llm.analysis.svc:8080                  expected blocked
+PASS  ingestor  ingest     tcp api.analysis.svc:8000                  expected blocked
+PASS  worker    analysis   tcp api.analysis.svc:8000                  expected blocked
+PASS  outsider  default    tcp api.analysis.svc:8000                  expected blocked
+PASS  host      -          http://localhost:8088/healthz (via Traefik) expected open
 ```
 
 The outsider pod sits outside the three zones, and its own egress is open.
-Its connections are blocked by the database's and the LLM's own ingress
-rules, so both ends of every connection are enforced. The API is in the
-same zone as the LLM and still cannot reach it.
+Its connections are blocked by the database's, the LLM's and the API's own
+ingress rules, so both ends of every connection are enforced. The API is in
+the same zone as the LLM and still cannot reach it; the API itself is
+reachable only through Traefik, checked from the host the way analysts
+reach it. A mutation test (a temporary policy opening the API to everyone)
+made exactly the outsider's check fail, so the checks can catch a broken
+rule (D12).
 
 **Least privilege in the database (D1, D13).**
 - Three login roles:
@@ -268,7 +332,8 @@ sentence.
 
 **The UI (D25).**
 - **Only Traefik reaches the API pods.** From another pod, a connection to
-  the API Service is refused; through Traefik, it answers.
+  the API Service is refused; through Traefik, it answers. Both are checked
+  by `make verify-boundary`.
 - **Every value on the page is escaped** by Jinja2, the LLM's sentence
   included, and the page loads nothing from the internet.
 - **Writes from another origin are refused.** There is no login (A4), so
@@ -411,35 +476,103 @@ pull: every registry is mirrored to an unresolvable address and k3s'
 fallback to the real registry is disabled (D9). A connected laptop therefore
 behaves like an isolated site, and an image missing from the bundle fails
 visibly instead of being downloaded. The LLM's weights travel the same way,
-inside the LLM image, pinned and checksum-verified at build time (D22). On a site with its own registry (e.g. Harbor), the
-same tarballs would be pushed there instead. See
+inside the LLM image, pinned and checksum-verified at build time (D22). On a
+site with its own registry (e.g. Harbor), the same tarballs would be pushed
+there instead. See
 [D4](docs/DECISIONS.md#d4-getting-images-into-the-cluster-offline-image-bundle-step-3a).
 
-*The rest is TBD.*
+- **What travels:** the repository and `dist/images/<arch>/`, about 4 GB,
+  3.5 GB of it the LLM image. `dist/models/` is only needed to build.
+- **An update to an isolated site:** build the new bundle on a connected
+  machine with `make build`, carry it over, and run `make start`. Only
+  images whose content changed get a new tag and are imported; the
+  migrations run first; the API rolls without downtime (§7).
+- **Architectures:** `make build ARCH=amd64` or `ARCH=arm64`. Third-party
+  images are downloaded for that architecture; building our own images for
+  another one needs QEMU emulation on the build machine.
+- **Tested from a clean clone** (D27): `make build` took 12.5 minutes and the
+  first `make start` 23 minutes on an HDD, then every check and both
+  zero-downtime demos passed. Nothing had to be fixed.
 
 ## 9. How AI agents were used
 
-*TBD (step 12).* The running log is in [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
+The brief encourages AI agents. All the code, tests and documents were
+written with **Claude Code** (Claude Opus 5.5), in three sessions; the
+step-by-step log is in [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
+
+- **The method,** versioned in [`CLAUDE.md`](CLAUDE.md):
+  - small steps;
+  - before each one, the agent explained what it would do and why, then
+    waited for the author's approval;
+  - read-only commands were free; installing, building, changing the
+    cluster and committing needed approval;
+  - external facts were verified, never assumed: the facts table in
+    `DECISIONS.md` has more than eighty entries, each with its source;
+  - every step ended with a check the author could run.
+- **The author decided** the scope and every product and risk trade-off,
+  among the options the agent laid out. For example: optional Bluesky
+  credentials, excluding replies to other accounts, a tie being `neutral`,
+  what `updated_at` means, and the worker's schedule.
+- **The agent** proposed options with a recommendation, wrote the code,
+  tests and documents, ran the checks and measured.
+- **Mistakes were caught and recorded, not hidden:**
+  - a wrong fact about Bluesky's search authentication, corrected when
+    tested;
+  - a time per post estimated at half its real value, found by measuring;
+  - a demo that stopped measuring too early;
+  - a secret printed into the agent's session by a failed `kubectl`
+    template. It was revoked and rotated, and Secrets are now inspected only
+    with `kubectl describe` (D27).
+- **The author reviewed** every decision: those of the first steps from a
+  summary table at the end, the rest step by step.
 
 ## 10. Time spent
 
-*TBD (step 12).*
+About **6 hours** of the author's active time (the author's own figure),
+spread over two days, 30 September and 1 October 2026, with breaks; all
+twelve steps. The brief expects one evening: the plan deliberately went
+further, with a fixed order of cuts in case time ran out (A10), and in the
+end nothing was cut.
 
 ## 11. Open items
+
+Improvements, none of them a missing requirement of the brief (A10).
+Grouped by theme, the most important first.
+
+### High availability and operations
 
 - **Highly available PostgreSQL:** replace the single instance with the
   CloudNativePG operator: replication, failover, and near-zero-outage minor
   upgrades (D14).
 - **PostgreSQL major upgrades:** automate one of the documented paths
   (`pg_upgrade` Job, dump/restore or logical replication).
-- **Secrets at rest:** enable k3s `--secrets-encryption`, one line in
-  `deploy/k3d/cluster.yaml`, applied when the cluster is created. Today
-  Secrets are only base64-encoded in the datastore.
+- **A highly available entry point:** k3d's load balancer is a single
+  container on the host. On-prem, put an external load balancer, or a
+  virtual IP (keepalived, kube-vip, MetalLB), in front of the nodes (D26).
+- **Graceful DNS:** CoreDNS stops at once when evicted, because k3s'
+  Corefile has no `lameduck`; the API compensates with a 1 s DNS retry
+  (D26). On-prem: CoreDNS with `lameduck`, or NodeLocal DNSCache on every
+  node.
+- **Run the zero-downtime demos in CI** for every change of the API or the
+  chart, and fail the pipeline on any failed request (D26).
+- **Show when the worker last ran:** `updated_at` is when a summary was
+  generated, so a quiet handle shows an old date even when everything
+  works. Recording each successful run would let the UI tell "no new
+  posts" from "the worker is not running" (D24).
+- **Build progress for the LLM image:** the build prints nothing for about
+  6 minutes while Docker compresses the 3.35 GB layer, which looks like a
+  hang. Show BuildKit's progress for that image.
+
+### Security
+
 - **Encryption in transit to PostgreSQL:** the official image runs with
   `ssl = off`, so connections from the zones travel unencrypted inside the
   cluster network. Enable TLS on the server, with a certificate from an
   internal CA (e.g. cert-manager), and require `sslmode=verify-full` in the
   clients.
+- **Secrets at rest:** enable k3s `--secrets-encryption`, one line in
+  `deploy/k3d/cluster.yaml`, applied when the cluster is created. Today
+  Secrets are only base64-encoded in the datastore.
 - **External secret manager:** Vault, External Secrets Operator, Sealed
   Secrets or SOPS, for rotation and audit of the database and Bluesky
   credentials (D13).
@@ -449,12 +582,31 @@ same tarballs would be pushed there instead. See
   forwards to upstream resolvers. That is a theoretical exfiltration channel;
   close it by restricting CoreDNS forwarding for that zone or with an
   internal-only resolver.
+- **OAuth instead of an app password:** an app password can act as the
+  account, although the ingestor only reads. Bluesky's OAuth allows
+  narrower permissions (D20).
+
+### Delivery and supply chain
+
 - **Bundle integrity:** images are pinned by tag and only the k3s tarball is
   checksum-verified. Pin every image by digest and ship a signed manifest of
   the bundle, including build provenance for our own images, whose
   attestations are disabled to keep tags deterministic (D15).
 - **Readable release versions:** combine a human version (e.g. `0.2.0`)
   with the content digest for our images (D15).
+
+### Product and data
+
+- **A real evaluation of the classifier:** the model was only checked on
+  15 hand-labelled posts (14 correct), and a sarcastic post reworded
+  without an explicit complaint was misclassified (D22). Label a few
+  hundred real posts, measure accuracy per class, and use that set to
+  compare prompts and models (E2B against E4B), and to catch regressions
+  when either changes.
+- **Say why a subscription has no posts:** a mistyped handle and one not
+  fetched yet both show "pending", because the analysis zone cannot ask
+  Bluesky. The ingestor could record, in a table of its own, that Bluesky
+  rejected a subscription, and the UI would show it (D25).
 - **Follow accounts by DID:** subscriptions store the handle, which is
   resolved on every call. A renamed account then answers "Profile not
   found". Resolve the handle once, store the account's DID, which never
@@ -466,42 +618,11 @@ same tarballs would be pushed there instead. See
   and Bluesky allows 300 logins per day per account, which bounds how often
   it can run. Keeping the refresh token between runs would lift that limit,
   but needs writable storage in `ingest` or a long-running pod (D20).
-- **OAuth instead of an app password:** an app password can act as the
-  account, although the ingestor only reads. Bluesky's OAuth allows
-  narrower permissions (D20).
-- **A real evaluation of the classifier:** the model was only checked on
-  15 hand-labelled posts (14 correct), and a sarcastic post reworded
-  without an explicit complaint was misclassified (D22). Label a few
-  hundred real posts, measure accuracy per class, and use that set to
-  compare prompts and models (E2B against E4B), and to catch regressions
-  when either changes.
 - **Event-driven summaries:** the ingestor could signal new posts through
   PostgreSQL `NOTIFY`, and an always-running worker `LISTEN` for them. It
   keeps the boundary, since zones only meet in `data`, and would cut a few
   minutes of delay, at the cost of reconnection handling and a sweep for
   missed notifications (D24).
-- **Say why a subscription has no posts:** a mistyped handle and one not
-  fetched yet both show "pending", because the analysis zone cannot ask
-  Bluesky. The ingestor could record, in a table of its own, that Bluesky
-  rejected a subscription, and the UI would show it (D25).
-- **Check the API's ingress in `make verify-boundary`:** that only Traefik
-  reaches the API pods was tested by hand (D25); it belongs in the script.
 - **A database connection pool for the API:** one connection per request
   is enough for an analysts' UI. A pool would save a few milliseconds per
   request under heavier traffic (D25).
-- **Graceful DNS:** CoreDNS stops at once when evicted, because k3s'
-  Corefile has no `lameduck`; the API compensates with a 1 s DNS retry
-  (D26). On-prem: CoreDNS with `lameduck`, or NodeLocal DNSCache on every
-  node.
-- **A highly available entry point:** k3d's load balancer is a single
-  container on the host. On-prem, put an external load balancer, or a
-  virtual IP (keepalived, kube-vip, MetalLB), in front of the nodes (D26).
-- **Run the zero-downtime demos in CI** for every change of the API or the
-  chart, and fail the pipeline on any failed request (D26).
-- **Show when the worker last ran:** `updated_at` is when a summary was
-  generated, so a quiet handle shows an old date even when everything
-  works. Recording each successful run would let the UI tell "no new
-  posts" from "the worker is not running" (D24).
-- **Build progress for the LLM image:** the build prints nothing for about
-  6 minutes while Docker compresses the 3.35 GB layer, which looks like a
-  hang. Show BuildKit's progress for that image.

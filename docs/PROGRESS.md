@@ -1,36 +1,25 @@
 # Progress
 
-_Last updated: 2026-10-01 (step 11)._
+_Last updated: 2026-10-01 (step 12)._
 
 ## Current step
 
-**Step 11: `make build` and `make start` from a clean clone (D27).** Done:
-- a `git clone` into `~/social-signal-clean`, with no `dist/` and no `.env`;
-  nothing had to be fixed;
-- `make build` 12.5 minutes, the first `make start` 23 minutes (16.5 of
-  them importing images), a second `make start` 1 minute;
-- `verify-boundary` 31/31, `llm-smoke` 3/3, the README's flow end to end
-  (both subscriptions summarised), `demo-update` 393/393 and `demo-drain`
-  358/358;
-- with the author's `.env` copied in, the hashtag ingestor logged in;
-- **a security incident caused by the agent:** a failed `kubectl`
-  template printed the Bluesky Secret's values into the agent's session.
-  The author revoked the app password and set a new one in `.env`;
-  `make start` replaced the Secret, and the login works.
+**All twelve steps are done.** Step 12, the final documentation:
+- `DESIGN.md` complete: an architecture diagram and the flow, a table of
+  the key decisions, delivery to isolated sites, how AI agents were used,
+  the time spent (about 6 hours) and the open items grouped by theme;
+- `make verify-boundary` also checks the API's ingress (35 checks), and a
+  mutation test proved the new checks can fail (D12);
+- the author reviewed the 17 decisions drafted in step 2; A3, A5, A10, D2
+  and D3 were updated;
+- the README starts with a short summary, and its figures were refreshed.
 
-Next: **step 12**, the final documentation (README, DESIGN with open
-items, how AI agents were used, the time spent) and a review of the zip.
+What remains: the submission zip, made from a fresh clone of the final
+commit, with its git history and without anything git-ignored.
 
-**State of the cluster:**
-- **It now runs from the clone** (`~/social-signal-clean`): k3s re-imports its
-  system images from that directory's `dist/` whenever a node starts, so
-  keep it until the cluster is recreated from `~/social-signal` (about 23 minutes)
-  or the project ends. `make` commands work from either directory: the
-  cluster's name and context are the same, and so are the image tags.
-- New data: `@bsky.app` (1 post, positive) and `#python` (47 posts,
-  neutral). The earlier data was lost with the old cluster, as agreed.
-- With the new password in both `.env` files, `ingestor-hashtags` logs in
-  every 20 minutes while the cluster runs.
+**State of the cluster:** it runs from `~/social-signal-clean` (step 11), with
+`@bsky.app` and `#python` summarised. Keep that directory until the cluster
+is deleted (`make clean`) or recreated from `~/social-signal`.
 
 ## Steps
 
@@ -55,17 +44,10 @@ items, how AI agents were used, the time spent) and a review of the zip.
 | 9 | API and minimal UI, behind Traefik | Done (2026-10-01) |
 | 10 | High availability and zero-downtime updates, with drain and update demos | Done (2026-10-01) |
 | 11 | `make build` and `make start` from a clean clone | Done (2026-10-01) |
-| 12 | Final documentation and zip review | Pending |
+| 12 | Final documentation, API ingress checks, decisions reviewed, zip | Done (2026-10-01) |
 
 ## Follow-ups
 
-- Review the *Options / Why / Trade-off* write-ups drafted in
-  [`DECISIONS.md`](DECISIONS.md).
-- Step 12: add the API's ingress checks to `make verify-boundary` (only
-  Traefik reaches it; tested by hand in step 9), or leave it as an open
-  item.
-- Step 12: fill in the time log below, and DESIGN's sections on AI use and
-  time spent.
 - After the project: delete `~/social-signal-clean` only together with the
   cluster (`make clean`), or after recreating it from `~/social-signal`.
 
@@ -91,6 +73,7 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 
 | Date | Steps | Time | Notes |
 |---|---|---|---|
-| 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
-| 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 / 10-01 | 5a-11 | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 | 0-1 | | Session 1 (Windows) |
+| 2026-09-30 | 2-4c | | Session 2 (WSL) |
+| 2026-09-30 / 10-01 | 5a-12 | | Session 3 (WSL, new conversation) |
+| **Total** | 0-12 | **about 6 hours** | The author's active time, not split per session; the gaps between commits are breaks |
