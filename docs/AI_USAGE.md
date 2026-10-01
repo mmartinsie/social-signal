@@ -696,3 +696,33 @@ memory is trimmed so it does not duplicate them.
 - **Side finding:** the machine's clock jumped by about six hours during
   the step, probably a suspend; the agent noted it so that the logs' times
   are not misread.
+
+### Step 11: from a clean clone (session 3)
+
+- **Author decided:** "do it", after the agent warned that the test meant
+  deleting the cluster and its data, and taking 15-25 minutes. Midway, the
+  author asked whether to copy `.env` into the clone. The agent proposed
+  to test without it first, as a reviewer would, then copy it (with
+  `cp -p`, without reading it) to test the credentials path. The author's
+  idea and the agent's order were both kept.
+- **Checked before starting:** free space where the WSL disk actually
+  lives (drive D:, not the nearly full C:).
+- **Ran and timed:** `make build` (12.5 minutes) and `make start` (23
+  minutes) in the clone, with milestone monitors instead of silent waits;
+  then every check and both demos on the new cluster. Nothing in the
+  repository had to be fixed.
+- **Security incident, the agent's mistake.** To confirm that the Bluesky
+  Secret had no `last-applied` annotation, the agent ran `kubectl get
+  secret -o go-template` with a template that failed on a missing field.
+  kubectl then printed the whole object, base64 values included, into the
+  agent's session. The agent:
+  - stopped all work and told the author at once, in plain words, without
+    repeating the value;
+  - recommended revoking the app password, and gave the exact steps;
+  - saved a rule in its persistent memory: Secrets are inspected only with
+    `kubectl describe`, which never prints values;
+  - after the author rotated the password, copied the new `.env` and ran
+    `make start`, checked the Secret with `describe` (key names and sizes
+    only), and confirmed the login.
+  The design held: the value never reached git, an image, a log or Helm.
+  The leak came from how the agent inspected it.

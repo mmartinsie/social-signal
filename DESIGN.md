@@ -214,6 +214,11 @@ into a Secret that exists only in `ingest`.
 - Only the hashtag ingestor mounts it, as files. The handle ingestor never
   sees it, and neither does the analysis zone.
 - It appears in no log and no Helm release (tested).
+- Rotating it is editing `.env` and running `make start`, which replaces the
+  Secret in about a minute. This was done for real in step 11 (D27), after
+  an operator mistake exposed the old value: inspecting the Secret with a
+  `kubectl` template that failed printed it. Secrets are now inspected only
+  with `kubectl describe`, which never shows values.
 
 **Proof, second layer (D17).**
 - `make verify-boundary` also starts a `psql` pod in each zone, with that

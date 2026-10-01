@@ -1775,6 +1775,81 @@ recorded below.
     The two worker runs stopped by drains ended `Failed`, and the next run
     summarised `#python` again.
 
+### D27. `make build` and `make start` from a clean clone (step 11)
+
+- **Decision:** test exactly what a reviewer gets.
+  - **A `git clone` into a new directory** (`~/social-signal-clean`), with no
+    `dist/` and no `.env`.
+  - **The previous cluster deleted first** (`make clean`), since the
+    cluster's name and ports are fixed. The author accepted losing the
+    demo data.
+  - **Then:**
+    - `make build` and `make start`, timed;
+    - every check: `make verify-boundary`, `make llm-smoke`, the README's
+      flow (subscribe in the UI, run the ingestors and the worker now), and
+      both zero-downtime demos;
+    - finally, the author's `.env` copied in and `make start` run again,
+      to test the credentials path and a second start.
+- **Alternatives:**
+  - **Reuse `dist/` or the model from the working copy.** Faster, but it
+    would not test the downloads a reviewer runs.
+  - **Clear Docker's build cache too.** Closer to a new machine, but it
+    would throw away about 12 GB of cache used for development. The
+    timings say the cache was warm.
+- **Why:** files missing from git, paths that only exist on the
+  development machine, or steps that depend on earlier state only show up
+  from a clean clone.
+- **Trade-off:**
+  - About 35 minutes and 7 GB of disk for a second `dist/`.
+  - The cluster now runs from the clone's bundle: k3s re-imports its system
+    images from `~/social-signal-clean/dist` whenever a node starts, so that
+    directory must stay until the cluster is recreated.
+- **Verified:**
+  - **Nothing had to be fixed:** the clone built and started as committed.
+  - **`make build`: 12.5 minutes,** exit 0:
+    - k3s' air-gap images, downloaded and checksum-verified, 10 s;
+    - the other third-party images, 1.5 minutes;
+    - the model, downloaded and checksum-verified, 4.5 minutes;
+    - our Python images, 1.5 minutes (warm cache, same tags as the
+      working copy);
+    - the LLM image, built and saved, 5 minutes.
+  - **`make start`: 23 minutes,** exit 0:
+    - creating the cluster, 1.5 minutes;
+    - importing the images into the three nodes, 16.5 minutes. That is
+      longer than the 9 minutes of step 7b, because on a new cluster k3s
+      imports its own air-gap images from the same disk at the same time;
+    - the system components and the platform's high availability (two
+      CoreDNS and two Traefik pods, three PDBs), 3 minutes;
+    - new database Secrets, then the two Helm releases, the LLM loading
+      included, 2 minutes;
+    - without `.env`, it said that hashtags would be searched without
+      authentication.
+  - **Checks:**
+    - `make verify-boundary` 31/31, and `make llm-smoke` 3/3;
+    - the UI's empty state ("No subscriptions yet");
+    - `bsky.app` and `#python` subscribed through the form, and the
+      README's commands to run the ingestors now: 42 and 46 posts. The
+      search worked without authentication that day;
+    - the worker's first run used up its budget, and the next one finished
+      `#python`: 47 posts, `neutral` (11 / 34 / 2);
+    - `make demo-update` 393 of 393, and `make demo-drain` (the node with
+      an API, a Traefik and a CoreDNS pod) 358 of 358.
+  - **A second `make start` with `.env`:** 1 minute. Every image and
+    Secret was kept, and the Bluesky Secret was created. The hashtag
+    ingestor logged in and searched through the account's PDS.
+  - **Rotating the password:** after the author changed it in `.env`,
+    `make start` replaced the Secret, and the ingestor logged in with the
+    new one.
+  - **A security incident during this step, caused by the agent:** while
+    checking the Bluesky Secret's metadata, it used `kubectl get secret -o
+    go-template`. The template failed, and kubectl printed the whole object,
+    with the base64 values, into the agent's session. The agent stopped
+    and told the author, who revoked the app password and created a new
+    one (above). Since then, Secrets are only inspected with
+    `kubectl describe secret`, which shows key names and sizes, never
+    values. The Secret itself was correct: no `last-applied` annotation,
+    created by `kubectl create`.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1921,6 +1996,8 @@ External facts the decisions above depend on.
 | Without a `preStop`, an evicted Traefik pod refuses new connections for 1-2 s while kube-proxy still routes to it; an evicted CoreDNS pod can leave a lookup unanswered until the resolver's 5 s retry | Drains under load with probes on every node (D26) | 2026-10-01 |
 | `kubectl drain` prints "evicting pod" when it starts and "pod/... evicted" only once the pod is gone | `kubectl drain` output (D26) | 2026-10-01 |
 | k3d's load balancer sends host port 8088 to port 80 of every node; Traefik's Service is a `LoadBalancer` with `externalTrafficPolicy: Cluster`, served on each node by k3s' `svclb` DaemonSet | `/etc/confd/values.yaml` in `k3d-socialsignal-serverlb`; the Service (D26) | 2026-10-01 |
+| When a `kubectl get -o go-template` fails, kubectl prints the raw object it was given: for a Secret, its base64 values. `kubectl describe secret` shows only key names and sizes | Incident in step 11 (D27) | 2026-10-01 |
+| From a clean clone on this HDD: `make build` 12.5 minutes (warm build cache), the first `make start` 23 minutes, 16.5 of them importing images while k3s imports its own; a second `make start` 1 minute | Local test (D27) | 2026-10-01 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

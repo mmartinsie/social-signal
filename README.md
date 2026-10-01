@@ -65,11 +65,14 @@ Hugging Face. It does three things:
      (`docker/llm.Dockerfile`, non-root), so nothing is downloaded at
      runtime.
 
-The bundle is about 3.8 GB, 3.5 GB of it the LLM image. The first build
-takes about 10 minutes on an HDD: the download, plus compressing and saving
-the LLM image. `make start` then runs everything from the bundle without
-pulling anything. Running `make build` again skips whatever is already
-downloaded, and an unchanged image keeps its tag.
+The bundle is about 3.8 GB, 3.5 GB of it the LLM image. From a clean clone
+on the development machine (HDD), `make build` took 12.5 minutes: 1.5 for
+the third-party images, 4.5 to download the model, 1.5 for our Python
+images and 5 to build and save the LLM image. Docker's build cache was warm
+there; on a machine that never built these images, expect several more
+minutes. `make start` then runs everything from the bundle without pulling
+anything. Running `make build` again skips whatever is already downloaded,
+and an unchanged image keeps its tag.
 
 `make build ARCH=arm64` (or `ARCH=amd64`) prepares the bundle for another
 architecture. Third-party images are simply downloaded for it, but building
@@ -110,6 +113,23 @@ any registry. `make start` then:
 Running it again is safe: it creates, starts or leaves each piece as needed,
 and keeps existing passwords.
 
+**How long it takes**, measured from a clean clone on the development
+machine (HDD):
+- **The first `make start`: about 23 minutes.** 16.5 of them import the
+  images into the three nodes: our 3.5 GB LLM image, while k3s imports its
+  own system images at the same time. Then about 3 minutes for the system
+  components and 2 for the two Helm releases, the LLM loading included.
+- **Later starts: about 1 minute**, as long as no image changed; a changed
+  LLM image adds about 10 minutes.
+- On an SSD every import is much faster.
+
+- **The UI:** <http://localhost:8088>, through Traefik, bound to
+  localhost.
+- Kubernetes API: `127.0.0.1:6445`. Nothing is exposed beyond localhost.
+- `make start` does not change your current kubectl context. Use
+  `kubectl --context k3d-socialsignal ...`, or switch explicitly with
+  `kubectl config use-context k3d-socialsignal`.
+
 ### Optional: Bluesky credentials for hashtags
 
 Hashtag search works without credentials only while Bluesky allows it: it
@@ -125,21 +145,11 @@ credentials. To make hashtag search always work:
 3. Run `make start`.
 
 `.env` is git-ignored and never copied into an image. Only the hashtag
-ingestor mounts the resulting Secret. With credentials, each hashtag run
+ingestor mounts the resulting Secret. To change or revoke the password, edit
+`.env` (or empty it) and run `make start` again: the Secret is replaced (or
+deleted) within a minute. With credentials, each hashtag run
 logs in once, and Bluesky allows 300 logins per day per account: the
 20-minute schedule uses 72.
-
-The first start takes a few minutes while k3s imports its system images
-(about 4.5 minutes on an HDD). Importing the 3.5 GB LLM image into the
-three nodes adds about 10 minutes on an HDD, but only when that image
-changes; later starts are faster.
-
-- **The UI:** <http://localhost:8088>, through Traefik, bound to
-  localhost.
-- Kubernetes API: `127.0.0.1:6445`. Nothing is exposed beyond localhost.
-- `make start` does not change your current kubectl context. Use
-  `kubectl --context k3d-socialsignal ...`, or switch explicitly with
-  `kubectl config use-context k3d-socialsignal`.
 
 ## Use it
 
