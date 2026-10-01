@@ -105,6 +105,22 @@ summary is stored with its label and counts only, and the sentence is
 retried. If the LLM is down, nothing is rewritten, and the analysts keep
 seeing the last summary with its date.
 
+**API and UI (D25).** A Deployment `api` in `analysis`, 2 replicas of
+FastAPI, behind Traefik on `http://localhost:8088`.
+- **The page** is rendered on the server, with no JavaScript and no
+  external assets, so it works in an isolated network. It has a form to
+  subscribe to a handle or a hashtag, and a table: for each subscription,
+  the dominant label, the count per label, the number of posts, the LLM's
+  sentence and when the summary was updated, plus an "Unsubscribe" button.
+- **Each state is explained:** waiting for the first posts, being
+  analysed, no posts in the last 7 days, or a summary without its sentence.
+- **A small JSON API** does the same: list, subscribe, unsubscribe.
+- It only reads what the worker precomputed and never calls the LLM, so it
+  keeps answering while the LLM is down. If PostgreSQL is down, the page
+  says so, with a 503.
+- The analysis zone has no internet, so the API only checks the format of a
+  handle or hashtag. One that Bluesky does not know stays "pending".
+
 **Data model (migration `0001`, D16).** All tables are owned by `migrator`;
 the application roles only get what their zone needs:
 
@@ -245,6 +261,16 @@ injection). What limits the damage:
 At worst, one post could distort its own label or its subscription's
 sentence.
 
+**The UI (D25).**
+- **Only Traefik reaches the API pods.** From another pod, a connection to
+  the API Service is refused; through Traefik, it answers.
+- **Every value on the page is escaped** by Jinja2, the LLM's sentence
+  included, and the page loads nothing from the internet.
+- **Writes from another origin are refused.** There is no login (A4), so
+  without this check any web page the analyst opens could make the browser
+  subscribe or unsubscribe on the internal UI. A POST whose `Origin` does
+  not match the host gets a 403.
+
 ## 6. High availability
 
 **PostgreSQL: one pod, on purpose (D14).**
@@ -273,7 +299,16 @@ replaced by the next one, on another node, 5 minutes later. Labels are
 stored as they are produced, so no work is lost. While the worker or the
 LLM is down, the API keeps serving the last summaries.
 
-*API replicas, probes, PDB and node drain: TBD (step 10).*
+**API: two replicas from the start (D25).** The analysts use it, so this
+is where high availability matters.
+- Its probes check only the process, never the database. With PostgreSQL
+  down, the pods stay ready and the page says what is wrong, instead of
+  Traefik answering a bare 503 (tested).
+- Each request opens its own database connection, so the API recovers on
+  its own once PostgreSQL is back (tested: within seconds, no restart).
+
+*PodDisruptionBudget, rolling update settings, spreading over nodes and
+the node drain demo: TBD (step 10).*
 
 ## 7. Continuous updates
 
@@ -393,6 +428,15 @@ same tarballs would be pushed there instead. See
   keeps the boundary, since zones only meet in `data`, and would cut a few
   minutes of delay, at the cost of reconnection handling and a sweep for
   missed notifications (D24).
+- **Say why a subscription has no posts:** a mistyped handle and one not
+  fetched yet both show "pending", because the analysis zone cannot ask
+  Bluesky. The ingestor could record, in a table of its own, that Bluesky
+  rejected a subscription, and the UI would show it (D25).
+- **Check the API's ingress in `make verify-boundary`:** that only Traefik
+  reaches the API pods was tested by hand (D25); it belongs in the script.
+- **A database connection pool for the API:** one connection per request
+  is enough for an analysts' UI. A pool would save a few milliseconds per
+  request under heavier traffic (D25).
 - **Show when the worker last ran:** `updated_at` is when a summary was
   generated, so a quiet handle shows an old date even when everything
   works. Recording each successful run would let the UI tell "no new

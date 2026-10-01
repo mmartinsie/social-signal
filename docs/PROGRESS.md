@@ -1,32 +1,39 @@
 # Progress
 
-_Last updated: 2026-10-01 (step 8)._
+_Last updated: 2026-10-01 (step 9)._
 
 ## Current step
 
-**Step 8: the summary worker (D24).** Done, in one go at the author's
-request (8a code and tests, 8b image and CronJob, 8c the LLM sentence):
-- `worker` CronJob in `analysis`, every 5 minutes at :02, :07…;
-- it classifies each post of the window once, and rewrites a summary only
-  when its posts change; ties are `neutral`;
-- 43 new unit tests (96 in total); the SQL was checked as `analysis` in a
-  rolled-back transaction;
-- in the cluster, the first run found everything unclassified: it used up
-  its 180 s budget after 34 posts, and the next run finished `#python`
-  (17 posts in 77 s, the sentence in 49 s);
-- with the LLM scaled to 0, the run failed with "not ready: nothing done"
-  and both summaries were kept; once it was back, the next run caught up
-  on its own;
-- a run with nothing new logs `unchanged` and leaves `updated_at` alone;
-- `verify-boundary` 31/31.
+**Step 9: the API and the minimal UI (D25).** Done, in one go at the
+author's request, with every recommended decision:
+- `api` Deployment (2 replicas), Service and Traefik Ingress in
+  `analysis`: the UI at <http://localhost:8088>, plus a small JSON API;
+- a page rendered on the server, with no JavaScript and no external
+  assets; every state is explained (pending, being analysed, no recent
+  posts, no sentence);
+- probes that never touch the database; writes from another origin
+  refused; Jinja2 escapes the LLM's sentence;
+- 52 new unit tests (148 in total);
+- end to end in the cluster: subscribed `@AtProto.com` through the form,
+  saw it go from pending to a summary in about 3 minutes, then
+  unsubscribed;
+- with PostgreSQL scaled to 0, the page said so with a 503, the pods stayed
+  ready, and the API recovered on its own;
+- what must stay untouched was checked: NetworkPolicies, the database
+  chart, the migration, the platform, the other services, the LLM image
+  and `.env` are unchanged; `verify-boundary` 31/31 and `llm-smoke` 3/3.
 
-Next: **step 9**, the API and the minimal UI. It reads `summaries` and
-manages `subscriptions` as `analysis`.
+Next: **step 10**, high availability and zero-downtime updates:
+PodDisruptionBudget, rolling update with `maxUnavailable: 0`, spreading
+the API over nodes, graceful shutdown, and a demo of an update and of a
+node drain without downtime.
 
 **State of the cluster:**
-- Summaries for `@bsky.app` (1 post, positive) and `#python` (50 posts,
-  neutral), with sentences.
-- The LLM runs on one node, and its image is present on all three.
+- The UI shows `@bsky.app` (1 post, positive) and `#python` (50 posts,
+  neutral), with sentences. `@atproto.com` was subscribed and then
+  unsubscribed in the test; its posts and labels stay in the database.
+- The API runs 2 replicas, on different nodes; the LLM runs on one node,
+  and its image is present on all three.
 - The demo subscriptions stay until they are no longer needed (author's
   decision). With the author's `.env`, `ingestor-hashtags` logs in to
   Bluesky every 20 minutes while the cluster runs (72 of the account's 300
@@ -52,7 +59,7 @@ manages `subscriptions` as `analysis`.
 | 7a | LLM image (model baked in), local evaluation | Done (2026-10-01) |
 | 7b | LLM in the cluster, boundary checks, smoke test | Done (2026-10-01) |
 | 8 | Summary worker: code and tests, image and CronJob, LLM sentence | Done (2026-10-01) |
-| 9 | API and minimal UI | Pending |
+| 9 | API and minimal UI, behind Traefik | Done (2026-10-01) |
 | 10 | High availability and zero-downtime updates | Pending |
 | 11 | `make build` and `make start` from a clean clone | Pending |
 | 12 | Final documentation and zip review | Pending |
@@ -61,26 +68,22 @@ manages `subscriptions` as `analysis`.
 
 - Review the *Options / Why / Trade-off* write-ups drafted in
   [`DECISIONS.md`](DECISIONS.md).
-- Until the API exists (step 9), subscriptions are created with `psql` as
-  `analysis` (`SET ROLE analysis` in `postgres-0`; see the README).
-- Step 9: pods must carry `app.kubernetes.io/component: api`, and its
-  Service must also select `app.kubernetes.io/instance`, so that the
-  `verify-boundary` test pods never receive traffic (D12).
-- Step 9: use the Helm helpers for the database environment and the
-  security contexts (D21), with the `credentials.analysis` Secret, as the
-  worker does.
-- Step 9: show each summary's `updated_at`, the counts and the item count;
-  a summary may have no sentence (degraded mode) or no label (no recent
-  posts). A subscription without a row in `summaries` is still pending.
-- Step 9: display the LLM's sentence as text, never as HTML: it is written
-  from untrusted posts (D24).
+- Step 10: the API's probes check only the process (D25). For a rolling
+  update without errors, add a graceful shutdown: on SIGTERM, `/readyz`
+  should fail first (or a `preStop` sleep) so Traefik stops sending
+  requests before uvicorn stops.
+- Step 10: the two API replicas landed on different nodes by chance; add a
+  topology spread constraint or anti-affinity.
 - Step 10: the LLM image is on every node, so the LLM can be rescheduled
   when its node is drained. Expect about 40 s without classification while
   the model loads (D23). The worker then fails one run and recovers on
   the next (D24).
 - Step 10: the `local-path` volume pins PostgreSQL to one node. For the
   drain demo, drain a node that does *not* host `postgres-0`, or explain the
-  outage (D14).
+  outage (D14). While PostgreSQL is down, the UI answers 503 and says so
+  (D25).
+- Step 10 or 12: add the API's ingress checks to `make verify-boundary`
+  (only Traefik reaches it; tested by hand in step 9).
 
 ## How to resume
 
@@ -106,4 +109,4 @@ Filled in by the author; it feeds the time report in `DESIGN.md`.
 |---|---|---|---|
 | 2026-09-30 | 0-1 | *TBD* | Session 1 (Windows) |
 | 2026-09-30 | 2-4c | *TBD* | Session 2 (WSL) |
-| 2026-09-30 / 10-01 | 5a-8 | *TBD* | Session 3 (WSL, new conversation) |
+| 2026-09-30 / 10-01 | 5a-9 | *TBD* | Session 3 (WSL, new conversation) |

@@ -3,7 +3,13 @@ name = "socialsignal-api"
 version = "0.1.0"
 description = "HTTP API and minimal UI to manage subscriptions and read sentiment summaries."
 requires-python = ">=3.12"
-dependencies = ["socialsignal-common"]
+dependencies = [
+    "fastapi>=0.142.2",
+    "jinja2>=3.1.6",
+    "python-multipart>=0.0.32",
+    "socialsignal-common",
+    "uvicorn>=0.54.0",
+]
 
 [tool.uv.sources]
 socialsignal-common = { workspace = true }

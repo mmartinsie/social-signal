@@ -27,7 +27,8 @@ UV_IMAGE        := ghcr.io/astral-sh/uv:0.12.21
 # name:package:directory
 APP_IMAGES      := migrations:socialsignal-migrations:services/migrations \
                    ingestor:socialsignal-ingestor:services/ingestor \
-                   worker:socialsignal-worker:services/worker
+                   worker:socialsignal-worker:services/worker \
+                   api:socialsignal-api:services/api
 
 # The LLM (A1, D22): Google's official Gemma 4 E2B GGUF, quantised to Q4_0
 # with quantisation-aware training, pinned to a repository revision and

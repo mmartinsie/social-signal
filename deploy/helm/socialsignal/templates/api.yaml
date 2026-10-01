@@ -1,0 +1,119 @@
+# The analysts' API and UI (D25), in the analysis zone. The `api`
+# NetworkPolicy lets in only Traefik, and lets it reach only PostgreSQL and
+# the cluster DNS: no internet, and not the LLM. It reads the summaries the
+# worker precomputed, so it keeps answering while the LLM is down (A3).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  # High availability for the analysts: PodDisruptionBudget, rolling update
+  # settings and spreading over nodes come in step 10.
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "socialsignal.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "socialsignal.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ required "images.api is required (set by make start)" .Values.images.api }}
+          imagePullPolicy: IfNotPresent
+          command: [python, -m, socialsignal_api]
+          env:
+            {{- include "socialsignal.databaseEnv" (dict "root" $ "secret" .Values.credentials.analysis) | nindent 12 }}
+            - name: API_PORT
+              value: {{ .Values.ports.api | quote }}
+            # The page says what "recent" means: the worker's own values.
+            - name: SUMMARY_MAX_POSTS
+              value: {{ .Values.worker.summaryMaxPosts | quote }}
+            - name: SUMMARY_WINDOW_DAYS
+              value: {{ .Values.worker.summaryWindowDays | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ports.api }}
+          # Neither probe touches the database (D25): if PostgreSQL is down,
+          # the pods stay ready and the page says what is wrong.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            {{- include "socialsignal.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            {{- include "socialsignal.databaseVolumeMount" . | nindent 12 }}
+            # The root filesystem is read-only; form parsing may spool to a
+            # temporary file.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- include "socialsignal.databaseVolume" (dict "secret" .Values.credentials.analysis) | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+# Selects instance as well as component, so the verify-boundary test pod,
+# which carries only the component label, never receives traffic (D12).
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  selector:
+    app.kubernetes.io/component: api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.ports.api }}
+      targetPort: http
+---
+# The only entry point for analysts (D3): Traefik, bundled with k3s, on
+# http://localhost:8088 through k3d's load balancer (bound to localhost).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  ingressClassName: {{ .Values.api.ingressClassName }}
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  name: http

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SocialSignal</title>
+  {#- Everything is inline: no fonts, styles or scripts from the internet. #}
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #e1e5ec;
+      --positive: #1f8a4c; --neutral: #6b7280; --negative: #c0392b; --accent: #2f5bd3;
+      --error-bg: #fdecea; --error-text: #8a1c12;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11151c; --card: #1a2029; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b3340;
+        --positive: #3fbf74; --neutral: #9aa3b2; --negative: #ec6b5e; --accent: #7d9cff;
+        --error-bg: #3a1d1a; --error-text: #ffb4aa;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+           font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .lead { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+    form.subscribe { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 16px; }
+    label { display: flex; flex-direction: column; font-size: .85rem; color: var(--muted); gap: 4px; }
+    select, input[type=text] { font: inherit; color: var(--text); background: var(--bg);
+           border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+    input[type=text] { min-width: 260px; }
+    button { font: inherit; border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+    button.primary { background: var(--accent); color: #fff; border: 1px solid var(--accent); }
+    button.link { background: none; border: 1px solid var(--line); color: var(--muted); padding: 3px 10px; }
+    .error { background: var(--error-bg); color: var(--error-text); border-radius: 6px;
+             padding: 10px 14px; margin-bottom: 16px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+    th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-top: 0; }
+    .name { font-weight: 600; white-space: nowrap; }
+    .kind { display: block; font-weight: 400; font-size: .8rem; color: var(--muted); }
+    .badge { display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: .85rem;
+             font-weight: 600; color: #fff; }
+    .badge.positive { background: var(--positive); }
+    .badge.neutral { background: var(--neutral); }
+    .badge.negative { background: var(--negative); }
+    .bar { display: flex; height: 6px; width: 140px; border-radius: 3px; overflow: hidden;
+           background: var(--line); margin: 6px 0 2px; }
+    .bar span.positive { background: var(--positive); }
+    .bar span.neutral { background: var(--neutral); }
+    .bar span.negative { background: var(--negative); }
+    .counts, .muted { color: var(--muted); font-size: .85rem; }
+    .state { color: var(--muted); font-style: italic; }
+    .num { font-variant-numeric: tabular-nums; }
+    footer { color: var(--muted); font-size: .85rem; margin-top: 16px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SocialSignal</h1>
+  <p class="lead">Sentiment of recent posts from Bluesky accounts and hashtags. Each summary
+    covers the last {{ window.max_posts }} posts of the last {{ window.days }} days.</p>
+
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <form class="subscribe" method="post" action="/subscriptions">
+      <label>Kind
+        <select name="kind">
+          <option value="handle" {% if form.kind == "handle" %}selected{% endif %}>Account (@handle)</option>
+          <option value="hashtag" {% if form.kind == "hashtag" %}selected{% endif %}>Hashtag (#tag)</option>
+        </select>
+      </label>
+      <label>Account or hashtag
+        <input type="text" name="value" value="{{ form.value }}" required maxlength="253"
+               placeholder="bsky.app or python" autocomplete="off">
+      </label>
+      <button class="primary" type="submit">Subscribe</button>
+    </form>
+
+    {% if rows %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Subscription</th><th>Sentiment</th><th>Posts</th><th>Summary</th><th>Updated</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+          <tr>
+            <td class="name">{{ r.name }}<span class="kind">{{ "account" if r.kind == "handle" else "hashtag" }}</span></td>
+            {% if r.state == "ready" %}
+              {% set s = r.summary %}
+              <td>
+                <span class="badge {{ s.dominant_label }}">{{ s.dominant_label }}</span>
+                <div class="bar" aria-hidden="true">
+                  {% for name, count in [("positive", s.positive), ("neutral", s.neutral), ("negative", s.negative)] if count %}
+                  <span class="{{ name }}" style="width: {{ (100 * count / s.item_count) | round(1) }}%"></span>
+                  {% endfor %}
+                </div>
+                <span class="counts num">{{ s.positive }} positive · {{ s.neutral }} neutral · {{ s.negative }} negative</span>
+              </td>
+              <td class="num">{{ s.item_count }}</td>
+              <td>{% if s.text %}{{ s.text }}{% else %}<span class="state">No summary sentence: the language model did not answer. The label and counts are up to date.</span>{% endif %}</td>
+              <td><span title="{{ r.updated_iso }}">{{ r.updated }}</span></td>
+            {% elif r.state == "empty" %}
+              <td><span class="state">No posts in the last {{ window.days }} days</span></td>
+              <td class="num">0</td>
+              <td></td>
+              <td><span title="{{ r.updated_iso }}">{{ r.updated }}</span></td>
+            {% elif r.state == "analysing" %}
+              <td colspan="4"><span class="state">Posts fetched; their sentiment is being analysed.</span></td>
+            {% else %}
+              <td colspan="4"><span class="state">Waiting for the first posts. If this lasts more than a few
+                minutes, check that the {{ "account" if r.kind == "handle" else "hashtag" }} exists on Bluesky.</span></td>
+            {% endif %}
+            <td>
+              <form method="post" action="/subscriptions/{{ r.id }}/delete">
+                <button class="link" type="submit" aria-label="Unsubscribe from {{ r.name }}">Unsubscribe</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% elif not error %}
+    <p class="muted">No subscriptions yet. Subscribe to a Bluesky account or a hashtag above.</p>
+    {% endif %}
+  </div>
+
+  <footer>New posts are fetched and analysed every few minutes; reload the page to see the latest.
+    Times are shown relative to now; hover for the exact time (UTC).</footer>
+</main>
+</body>
+</html>

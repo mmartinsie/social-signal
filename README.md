@@ -59,7 +59,7 @@ Hugging Face. It does three things:
 3. **Our images:** builds them with Docker, each tagged with a hash of its
    content and added to the bundle, with the references written to
    `dist/images/<arch>/app/images.txt`:
-   - `migrations`, `ingestor` and `worker`, from one Dockerfile
+   - `migrations`, `ingestor`, `worker` and `api`, from one Dockerfile
      (`docker/python-service.Dockerfile`, Python 3.12 with uv, non-root);
    - `llm`: llama.cpp's server with the model baked in
      (`docker/llm.Dockerfile`, non-root), so nothing is downloaded at
@@ -96,7 +96,8 @@ any registry. `make start` then:
 4. installs two Helm releases: `socialsignal-db` (PostgreSQL, in `data`),
    then `socialsignal` (the application). The application's schema
    migration runs first, as a Helm hook; if it fails, nothing new is rolled
-   out. The application release includes three CronJobs:
+   out. The application release includes the **API and UI** (2 replicas,
+   behind Traefik), the **LLM**, and three CronJobs:
    - `ingestor-handles`, in `ingest`, reads the subscribed Bluesky
      accounts every 5 minutes (:00, :05…);
    - `ingestor-hashtags`, in `ingest`, reads the subscribed hashtags every
@@ -132,11 +133,65 @@ The first start takes a few minutes while k3s imports its system images
 three nodes adds about 10 minutes on an HDD, but only when that image
 changes; later starts are faster.
 
-- UI entry point (Traefik): <http://localhost:8088>. *The application: TBD.*
+- **The UI:** <http://localhost:8088>, through Traefik, bound to
+  localhost.
 - Kubernetes API: `127.0.0.1:6445`. Nothing is exposed beyond localhost.
 - `make start` does not change your current kubectl context. Use
   `kubectl --context k3d-socialsignal ...`, or switch explicitly with
   `kubectl config use-context k3d-socialsignal`.
+
+## Use it
+
+Open <http://localhost:8088> and subscribe to a Bluesky account (for
+example `bsky.app`) or a hashtag (for example `python`). The `@` and `#`
+are optional. Each subscription then goes through these states:
+
+1. **Waiting for the first posts:** until the next ingestor run, at most
+   5 minutes for an account and 20 for a hashtag. If it stays here, check
+   that the account or hashtag exists: the analysis zone has no internet,
+   so the UI cannot check it for you.
+2. **Being analysed:** the worker runs every 5 minutes. On CPU a post takes
+   2.5 to 8 s depending on its length, so a new subscription with 50 posts
+   can take two runs.
+3. **The summary:** the dominant label (`neutral` on a tie), the count per
+   label, the number of posts it covers (the last 50 of the last 7 days),
+   one sentence written by the LLM, and when it was last updated. The
+   sentence may be missing if the LLM did not answer; the label and counts
+   are still up to date.
+
+Reload the page to see new results. The same through the JSON API:
+
+```sh
+curl -s http://localhost:8088/api/subscriptions
+curl -s -H 'Content-Type: application/json' -d '{"kind": "hashtag", "value": "python"}' \
+  http://localhost:8088/api/subscriptions
+curl -s -X DELETE http://localhost:8088/api/subscriptions/<id>
+```
+
+### Skip the wait (optional)
+
+Run an ingestor and then the worker now, instead of waiting for their
+schedules, and read their logs. `ingestor-hashtags` works like
+`ingestor-handles`:
+
+```sh
+kubectl --context k3d-socialsignal -n ingest create job handles-now --from=cronjob/ingestor-handles
+kubectl --context k3d-socialsignal -n ingest wait --for=condition=complete job/handles-now
+kubectl --context k3d-socialsignal -n ingest logs job/handles-now
+
+kubectl --context k3d-socialsignal -n analysis create job worker-now --from=cronjob/worker
+kubectl --context k3d-socialsignal -n analysis wait --for=condition=complete --timeout=5m job/worker-now
+kubectl --context k3d-socialsignal -n analysis logs job/worker-now
+```
+
+- **The ingestor's log** reports the posts it stored; a second run reports
+  `0 new posts`, because storing a post again is a no-op. Without
+  credentials, the hashtag log says whether it searched unauthenticated, or
+  whether Bluesky is blocking that.
+- **The worker's log** reports what it classified and summarised. A run
+  with nothing new ends in seconds and logs `unchanged`. While the LLM is
+  starting, the run fails with `the LLM … is not ready: nothing done`, and
+  the summaries are kept.
 
 ## Verify
 
@@ -174,65 +229,15 @@ make llm-smoke
 From a pod with the worker's identity, classifies three unambiguous posts
 with the offline LLM and checks the labels (a few seconds per post on CPU).
 
-### See the ingestor working
+## Development
 
-Until the UI exists, create a subscription with `psql`, as the `analysis`
-role that the API will use:
-
-```sh
-kubectl --context k3d-socialsignal exec -n data postgres-0 -- \
-  psql -U postgres -d socialsignal \
-  -c "SET ROLE analysis; INSERT INTO subscriptions (kind, value) VALUES ('handle', 'bsky.app'), ('hashtag', 'python') ON CONFLICT DO NOTHING;"
-```
-
-Handles are stored without `@` and hashtags without `#`, both lower-case.
-Then run an ingestor now, instead of waiting for its schedule, and read its
-log. `ingestor-hashtags` works the same way:
-
-```sh
-kubectl --context k3d-socialsignal -n ingest create job handles-now --from=cronjob/ingestor-handles
-kubectl --context k3d-socialsignal -n ingest wait --for=condition=complete job/handles-now
-kubectl --context k3d-socialsignal -n ingest logs job/handles-now
-```
-
-The first run reports the posts it stored. A second run reports
-`0 new posts`, because storing a post again is a no-op. Without
-credentials, the hashtag log says whether it searched unauthenticated, or
-whether Bluesky is blocking that.
-
-### See the summaries
-
-The `worker` CronJob picks up the stored posts at its next run, at most 5
-minutes later. To run it now, and read what it did:
-
-```sh
-kubectl --context k3d-socialsignal -n analysis create job worker-now --from=cronjob/worker
-kubectl --context k3d-socialsignal -n analysis wait --for=condition=complete --timeout=5m job/worker-now
-kubectl --context k3d-socialsignal -n analysis logs job/worker-now
-```
-
-Then read the summaries, as the API will:
-
-```sh
-kubectl --context k3d-socialsignal exec -n data postgres-0 -- \
-  psql -U postgres -d socialsignal -x \
-  -c "SET ROLE analysis; SELECT s.kind, s.value, m.* FROM summaries m JOIN subscriptions s ON s.id = m.subscription_id;"
-```
-
-Each summary has the dominant label, the count per label, the number of
-posts, one sentence written by the LLM and `updated_at`. On CPU a post
-takes 2.5 to 8 s depending on its length, so a new subscription with 50
-posts can take two runs. A run with nothing new ends in seconds and logs
-`unchanged`. While the LLM is starting, the run fails with `the LLM … is
-not ready: nothing done`, and the summaries are kept.
-
-### Unit tests (development)
+### Unit tests
 
 ```sh
 uv run pytest
 ```
 
-### Evaluate the LLM (development)
+### Evaluate the LLM
 
 `tools/llm_eval.py` runs the LLM image with no network and checks it on a
 small hand-labelled set (sarcasm and Spanish included), reporting the
@@ -281,8 +286,8 @@ Inside `deploy/`:
 - `platform/`: the namespaces and default-deny policies.
 - `helm/socialsignal-db/`: PostgreSQL (its own release, installed first).
 - `helm/socialsignal/`: the application chart: the per-component
-  NetworkPolicies, the migration Job, the two ingestor CronJobs, the LLM
-  and the summary worker's CronJob.
+  NetworkPolicies, the migration Job, the two ingestor CronJobs, the LLM,
+  the summary worker's CronJob, and the API with its Service and Ingress.
 
 Generated by `make build` and not versioned: `dist/images/`, the offline
 image bundle, and `dist/models/`, the LLM weights.

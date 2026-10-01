@@ -617,3 +617,46 @@ memory is trimmed so it does not duplicate them.
   happened during the 9-minute import of the LLM image: the API server was
   timing out under disk load. The agent reported it to the author without
   changing anything.
+
+### Step 9: the API and the minimal UI (session 3)
+
+- **Author decided:** accept every recommendation of the plan, do 9a and
+  9b in one go, and make sure what already works stays as it is.
+- **The agent made "untouchable" checkable.** Before starting it saved
+  checksums of the NetworkPolicies, the database chart, the migration and
+  the platform manifests. At the end it compared them, confirmed that no
+  file under the other services, the shared package or the scripts had
+  changed, and re-ran `verify-boundary` and `llm-smoke`.
+- **The agent changed its own plan, and said so:** it dropped the
+  `psycopg-pool` it had proposed in favour of one connection per request
+  with the existing shared `connect()`. That is simpler, recovers by itself
+  after a database restart, and leaves the shared package untouched.
+- **Verified before writing code:**
+  - the dependencies' latest versions on PyPI, and FastAPI's own
+    requirements;
+  - the AT Protocol's handle syntax and the hashtag limits, in the atproto
+    source and lexicons;
+  - Starlette 1.7's template autoescaping and response signature, in the
+    installed source.
+- **Agent built:**
+  - the API package and a server-rendered page, with no JavaScript and no
+    external assets;
+  - 52 unit tests, including an escaped `<script>` in the LLM's sentence
+    and a refused cross-site post;
+  - the Deployment, Service and Ingress.
+- **Side effect noticed and checked:** the new lock file gave the other
+  Python images new tags. The agent compared the old and new images
+  (package list and source files hashed): identical. It also diffed the
+  rendered release against the deployed one: only those tags and the new
+  API objects differed.
+- **Tested in the cluster:**
+  - the whole flow through the form, from "waiting for the first posts" to
+    a summary, then the unsubscribe and its cascade;
+  - a cross-site post (403), an invalid value (400), a duplicate (200);
+  - PostgreSQL scaled to 0, timed between an ingestor run and a worker run
+    so as not to break either: 503 page, pods still ready, recovery
+    without a restart;
+  - from another pod the API is refused; through Traefik it answers.
+- **Not done, recorded for later:** that check of the API's ingress is
+  not in `verify-boundary` yet; the agent left the script unchanged and
+  listed it as a follow-up.

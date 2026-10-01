@@ -11,6 +11,7 @@ images:
   migrations: ""
   ingestor: ""
   worker: ""
+  api: ""
   llm: ""
 
 # How every component reaches PostgreSQL (the socialsignal-db release).
@@ -121,3 +122,16 @@ worker:
   classifyTimeoutSeconds: 30
   sentenceTimeoutSeconds: 90
   runDeadlineSeconds: 285
+
+# The analysts' API and UI (D25), behind Traefik on http://localhost:8088.
+api:
+  # At least two, so one pod can be lost or replaced while the other
+  # serves (step 10 adds the PodDisruptionBudget and the update strategy).
+  replicas: 2
+  ingressClassName: traefik
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 256Mi

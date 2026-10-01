@@ -1540,6 +1540,129 @@ decisions, **E** = development environment, **R** = repository layout.
     subscriptions `unchanged`, no LLM call, `updated_at` untouched.
   - `make verify-boundary`: 31/31.
 
+### D25. The API and the minimal UI (step 9)
+
+The author accepted every recommendation, and asked that what already
+worked stay untouched.
+
+- **Decision:**
+  - **FastAPI, served by uvicorn**, in `services/api`, as a Deployment
+    `api` in `analysis` with 2 replicas, behind Traefik on
+    `http://localhost:8088` (D3).
+  - **A page rendered on the server with Jinja2**, with no JavaScript and
+    no external assets:
+    - a form to subscribe, with the kind and the value;
+    - a table with, for each subscription: the dominant label, a bar and
+      the count per label, the number of posts, the LLM's sentence, and
+      when the summary was updated (relative, with the UTC time on hover);
+    - an "Unsubscribe" button per row;
+    - after a successful form post, a 303 redirect to the page
+      (post/redirect/get), so reloading never posts again.
+  - **Every state is explained:**
+
+    | State | When | The page says |
+    |---|---|---|
+    | pending | no post was ever stored for it | waiting for the first posts; check the account or tag exists if it lasts |
+    | analysing | posts stored, no summary yet | being analysed |
+    | empty | summary of 0 posts | no posts in the last 7 days |
+    | ready | summary of 1 or more posts | label, counts, posts, sentence, time |
+
+    A ready summary without a sentence says so (degraded mode, A3).
+  - **A small JSON API** with the same code:
+    - `GET /api/subscriptions`;
+    - `POST /api/subscriptions`: 201 if created, 200 if it already existed;
+    - `DELETE /api/subscriptions/{id}`: 204, or 404.
+  - **`/docs` and `/redoc` are disabled:** Swagger UI loads its JavaScript
+    from a CDN, which an isolated network cannot reach.
+  - **Probes:** `/healthz` (liveness) and `/readyz` (readiness) check only
+    the process, not the database.
+  - **Validation, without internet access:**
+    - handles follow the AT Protocol's syntax; hashtags have no spaces and
+      at most 64 characters and 640 bytes;
+    - both are stored without `@` or `#` and in lower case, as the ingestor
+      expects;
+    - the API cannot ask Bluesky whether an account exists, so a typo stays
+      "pending".
+  - **Writes from another origin are refused (403).** For POST, PUT, PATCH
+    and DELETE, an `Origin` header must match the `Host`. Clients without
+    `Origin`, like curl, are allowed.
+  - **One database connection per request,** through the shared
+    `connect()`, as the `analysis` role. A database error becomes a page,
+    or a JSON answer, saying that the database is not reachable, with a 503.
+  - **The pod:** the chart's shared hardening, a writable `/tmp` (an
+    `emptyDir` of 16 MiB) for form parsing, and the worker's window values,
+    so the page states what "recent" means.
+- **Alternatives:**
+  - **A single-page app with JavaScript.** More code, a build step, and
+    nothing the brief needs.
+  - **Readiness that checks the database.** With PostgreSQL down, every
+    replica would turn unready at once: Traefik would answer a bare 503,
+    and Kubernetes would gain nothing, since no replica could serve anyway.
+  - **A connection pool (`psycopg-pool`),** first in the plan. It saves a
+    few milliseconds per request, but adds failure modes: connections that
+    died while PostgreSQL restarted, or a pool that gave up reconnecting.
+    Fine for an analysts' UI; an open item if traffic grows.
+  - **Validating handles against Bluesky.** Impossible from the analysis
+    zone without breaking the boundary. The ingestor could record why a
+    subscription has no posts; it is an open item.
+  - **A CSRF token in each form.** Stronger, but needs a session or a
+    secret. The `Origin` check covers browsers, which are the threat with
+    no login.
+- **Why:**
+  - Server-rendered HTML with autoescaping is the smallest UI that meets
+    the brief, and it works offline.
+  - The sentence is written from posts off the internet, and the template
+    escapes it.
+  - The API only reads what the worker precomputed, so it keeps answering
+    while the LLM is down.
+- **Trade-off:**
+  - The page does not refresh itself; the analyst reloads it.
+  - Anyone on the analysts' network can change the subscriptions (A4).
+  - A non-existent account and one not fetched yet look the same:
+    "pending".
+  - Changing `uv.lock` gives every Python image a new tag (D15), although
+    the other services' content is the same (checked).
+- **Verified:**
+  - **Before deploying:**
+    - 52 new unit tests, 148 in total: validation, every state, an
+      escaped `<script>`, a cross-site post refused, a database outage, and
+      probes that keep answering;
+    - the image: uid 10001, the template inside the package, imports
+      working with `--network none`;
+    - `migrations`, `ingestor` and `worker` got new tags because the lock
+      changed. Their packages, versions and code are identical to the
+      previous images: the same hash of the `dist-info` list and of every
+      `socialsignal` source file;
+    - the rendered release against the deployed one: apart from the new
+      Deployment, Service and Ingress, only those image tags differ.
+  - **In the cluster:**
+    - 2 replicas ready on different nodes; `GET /` through Traefik 200 in
+      0.4 s, then about 20 ms;
+    - from another pod, `api.analysis.svc:8000` is refused (curl exit 7);
+      through Traefik, 200;
+    - **end to end:** `@AtProto.com` subscribed through the form (303)
+      was stored as `atproto.com` and shown as pending. The next ingestor
+      stored 48 posts, and the page said "being analysed". Three minutes
+      later the worker summarised its 3 recent posts (`neutral`, with a
+      sentence), visible on the page and in the API;
+    - a cross-site form post got 403, `two words` as a hashtag 400 with
+      the reason, and `#Python` again 200 with the existing id;
+    - **unsubscribing through the form** got 303, and a second `DELETE`
+      404. The cascade removed the link and the summary; the 48 posts and
+      their 3 labels stayed;
+    - **PostgreSQL scaled to 0:** the page answered 503 in 10 ms with "The
+      database is not reachable right now", the JSON API 503, and both
+      pods stayed `Ready`. Once PostgreSQL was back, the API answered 200
+      within seconds, without restarting.
+  - **What must stay untouched, checked:**
+    - the NetworkPolicies, the database chart, the migration and the
+      platform manifests have the same checksums;
+    - no change under the other services, the shared package, the scripts
+      or the other templates;
+    - the LLM image is the same (`dec1162d9ccc`), and `.env` was not
+      touched;
+    - `make verify-boundary` 31/31, and `make llm-smoke` 3/3.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1675,6 +1798,11 @@ External facts the decisions above depend on.
 | llama-server's `/v1/models` lists the model under its `--alias` (`gemma-4-E2B-it-qat-q4_0`) | The worker's stored `model` column (D24) | 2026-10-01 |
 | With Gemma 4 E2B on 4 CPU cores, a label takes about 2.5 s for a 40-character post and 5-8 s for one near 300 characters; real `#python` posts (198 characters on average) took 5.35 s each | `classified_at` of 33 posts in the cluster (D24) | 2026-10-01 |
 | One summary sentence over 20 real posts cut to 280 characters takes about 49 s on 4 CPU cores | Worker log in the cluster (D24) | 2026-10-01 |
+| Latest FastAPI 0.142.2 (requires Starlette >= 0.46 and, new, `opentelemetry-api`), uvicorn 0.54.0, Jinja2 3.1.6, python-multipart 0.0.32, Starlette 1.7.0; all support Python 3.12 | PyPI JSON API | 2026-10-01 |
+| Starlette 1.7's `Jinja2Templates` creates its environment with `autoescape=select_autoescape()`, which escapes `.html` templates | Installed source `starlette/templating.py`; unit test with a `<script>` sentence (D25) | 2026-10-01 |
+| AT Protocol handles: ASCII letters, digits and hyphens in at least two labels of 1-63 characters, the last starting with a letter, at most 253 characters, case-insensitive | atproto `packages/syntax/src/handle.ts` | 2026-10-01 |
+| A hashtag (`app.bsky.richtext.facet#tag`, and `searchPosts`' `tag`) has at most 64 graphemes and 640 bytes, without the `#` | Lexicons `app/bsky/richtext/facet.json`, `app/bsky/feed/searchPosts.json` | 2026-10-01 |
+| Starlette 1.7's `TestClient` warns that using `httpx` is deprecated in favour of `httpx2` (development only) | `uv run pytest` warning | 2026-10-01 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |
