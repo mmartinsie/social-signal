@@ -1,20 +1,22 @@
 """Evaluate the LLM image offline: label validity, accuracy on a small
-hand-labelled set, latency, and optionally real posts and one summary-sized
-prompt (D22).
+hand-labelled set, latency, and optionally real posts and one summary
+sentence (D22, D24).
 
-Run the LLM with no network at all, then run this script in a container
-that shares the LLM container's network namespace (the ingestor image has
-Python and httpx). Replace the tags with those in
+It uses the worker's own client (socialsignal_worker.llm), so it measures
+exactly the prompts and output format the worker sends. Run the LLM with no
+network at all, then run this script in the worker image, sharing the LLM
+container's network namespace. Replace the tags with those in
 dist/images/<arch>/app/images.txt:
 
     docker run -d --name llm-eval --network none --read-only --cap-drop ALL \
       socialsignal/llm:<tag> --threads 4 --ctx-size 8192 --parallel 1 --reasoning off
     docker run --rm --network container:llm-eval -v "$PWD/tools:/tools:ro" \
-      socialsignal/ingestor:<tag> python /tools/llm_eval.py
+      socialsignal/worker:<tag> python /tools/llm_eval.py
     docker rm -f llm-eval
 
 Options: --real FILE labels real posts from a JSON list of {"source", "text"}
-objects; --summary times one prompt with 50 posts (needs --real).
+objects; --summary times one summary sentence over them, the way the worker
+writes it (needs --real).
 
 This is a smoke check, not a benchmark: 16 examples can show that the model
 is useless, not how accurate it is. A real evaluation set is an open item.
@@ -27,27 +29,13 @@ import time
 
 import httpx
 
-MODEL = "gemma-4-E2B-it-qat-q4_0"
-LABELS = ["positive", "neutral", "negative"]
-SCHEMA = {
-    "type": "object",
-    "properties": {"label": {"type": "string", "enum": LABELS}},
-    "required": ["label"],
-    "additionalProperties": False,
-}
-# OpenAI's response_format shape: llama-server v0.5.0 ignores the
-# {"type": "json_schema", "schema": ...} shape its own README documents (D22).
-RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {"name": "sentiment", "schema": SCHEMA, "strict": True},
-}
-SYSTEM = (
-    "You classify the sentiment of one social media post. "
-    "positive: approval, joy, praise, gratitude, excitement. "
-    "negative: complaints, anger, sadness, criticism, including sarcasm that criticises. "
-    "neutral: facts, news, questions or announcements without a clear feeling. "
-    "The post may be in any language. Answer with JSON only."
-)
+from socialsignal_worker import llm
+from socialsignal_worker.summary import Counts, dominant_label
+
+# The worker's defaults (values.yaml): the sentence reads the 20 most recent
+# posts, each cut to 280 characters.
+SENTENCE_POSTS = 20
+SENTENCE_POST_CHARS = 280
 
 # (expected label, text). "mixed" has no single right answer and is not
 # counted in the accuracy.
@@ -78,22 +66,9 @@ LABELLED = [
 
 
 def classify(client: httpx.Client, text: str) -> tuple[str, float]:
-    body = {
-        "model": MODEL,
-        "temperature": 0,
-        "max_tokens": 16,
-        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}],
-        "response_format": RESPONSE_FORMAT,
-    }
     start = time.perf_counter()
-    response = client.post("/v1/chat/completions", json=body)
-    elapsed = time.perf_counter() - start
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
-    label = json.loads(content)["label"]
-    if label not in LABELS:
-        raise ValueError(f"not a label: {content!r}")
-    return label, elapsed
+    label = llm.classify(client, text, timeout=300)
+    return label, time.perf_counter() - start
 
 
 def wait_until_ready(client: httpx.Client) -> None:
@@ -124,46 +99,41 @@ def evaluate_labelled(client: httpx.Client, latencies: list[float]) -> None:
     print(f"accuracy {correct}/{total}")
 
 
-def evaluate_real(client: httpx.Client, posts: list[dict], latencies: list[float]) -> None:
+def evaluate_real(client: httpx.Client, posts: list[dict], latencies: list[float]) -> Counts:
     print("\n--- real posts")
-    counts = dict.fromkeys(LABELS, 0)
+    labels = []
     for post in posts:
         label, elapsed = classify(client, post["text"])
         latencies.append(elapsed)
-        counts[label] += 1
+        labels.append(label)
         print(f"   {elapsed:5.2f}s {label:8} [{post['source']}] {post['text'][:70]!r}")
-    print("label counts:", counts)
+    counts = Counts.of(labels)
+    print("label counts:", counts.as_dict())
+    return counts
 
 
-def time_summary(client: httpx.Client, posts: list[dict]) -> None:
-    """One prompt with 50 posts, the size a summary sentence would need."""
-    joined = "\n".join(f"- {post['text'][:280]}" for post in (posts * 50)[:50])
-    body = {
-        "model": MODEL,
-        "temperature": 0,
-        "max_tokens": 60,
-        "messages": [
-            {"role": "system", "content": "Summarise the overall sentiment of these posts in one sentence."},
-            {"role": "user", "content": joined},
-        ],
-    }
+def time_sentence(client: httpx.Client, posts: list[dict], counts: Counts) -> None:
+    """One summary sentence, written exactly as the worker writes it."""
     start = time.perf_counter()
-    data = client.post("/v1/chat/completions", json=body).json()
-    elapsed = time.perf_counter() - start
-    timings = data.get("timings", {})
-    print(
-        f"\nsummary prompt: {elapsed:.1f}s; prompt {timings.get('prompt_n')} tokens at "
-        f"{timings.get('prompt_per_second', 0):.0f} tok/s; generated {timings.get('predicted_n')} "
-        f"at {timings.get('predicted_per_second', 0):.1f} tok/s"
+    sentence = llm.write_sentence(
+        client,
+        "#evaluation",
+        counts,
+        dominant_label(counts) or "none",
+        [post["text"] for post in posts[:SENTENCE_POSTS]],
+        post_chars=SENTENCE_POST_CHARS,
+        timeout=600,
     )
-    print("summary:", data["choices"][0]["message"]["content"][:300])
+    elapsed = time.perf_counter() - start
+    print(f"\nsentence over {min(len(posts), SENTENCE_POSTS)} posts: {elapsed:.1f}s")
+    print("sentence:", sentence)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--url", default="http://127.0.0.1:8080")
     parser.add_argument("--real", help='JSON list of {"source", "text"} objects')
-    parser.add_argument("--summary", action="store_true", help="time one 50-post prompt")
+    parser.add_argument("--summary", action="store_true", help="time one summary sentence")
     args = parser.parse_args()
     posts = json.load(open(args.real)) if args.real else []
 
@@ -172,14 +142,13 @@ def main() -> None:
         classify(client, "Hello world.")  # warm-up: the first request pays one-off costs
         latencies: list[float] = []
         evaluate_labelled(client, latencies)
-        if posts:
-            evaluate_real(client, posts, latencies)
+        counts = evaluate_real(client, posts, latencies) if posts else Counts()
         print(
             f"\nper-post latency: median {statistics.median(latencies):.2f}s, "
             f"max {max(latencies):.2f}s over {len(latencies)} posts"
         )
         if args.summary and posts:
-            time_summary(client, posts)
+            time_sentence(client, posts, counts)
 
 
 if __name__ == "__main__":

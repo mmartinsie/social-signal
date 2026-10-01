@@ -1,0 +1,83 @@
+{{- /*
+Summary worker (A3, A8, D24): a CronJob in the analysis zone. The `worker`
+NetworkPolicy, which selects it through app.kubernetes.io/component, lets
+it reach only PostgreSQL, the LLM and the cluster DNS: no internet.
+*/ -}}
+{{- $w := .Values.worker }}
+{{- if ge (add $w.runBudgetSeconds $w.sentenceTimeoutSeconds | int) ($w.runDeadlineSeconds | int) }}
+{{- fail "worker.runBudgetSeconds + worker.sentenceTimeoutSeconds must be below worker.runDeadlineSeconds" }}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: worker
+  namespace: {{ .Values.namespaces.analysis }}
+  labels:
+    {{- include "socialsignal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  schedule: {{ $w.schedule | quote }}
+  # Never two runs at once: a post is classified by one run only.
+  concurrencyPolicy: Forbid
+  # A run that cannot start within 2 minutes of its time (e.g. the cluster
+  # was stopped) is skipped; the next one catches up.
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "socialsignal.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      # No immediate retry: the next scheduled run is the retry (A8).
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ $w.runDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "socialsignal.labels" . | nindent 12 }}
+            app.kubernetes.io/component: worker
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            {{- include "socialsignal.podSecurityContext" . | nindent 12 }}
+          containers:
+            - name: worker
+              image: {{ required "images.worker is required (set by make start)" .Values.images.worker }}
+              imagePullPolicy: IfNotPresent
+              command: [python, -m, socialsignal_worker]
+              env:
+                {{- include "socialsignal.databaseEnv" (dict "root" $ "secret" .Values.credentials.analysis) | nindent 16 }}
+                - name: LLM_URL
+                  value: "http://llm.{{ .Values.namespaces.analysis }}.svc.cluster.local:{{ .Values.ports.llm }}"
+                - name: SUMMARY_MAX_POSTS
+                  value: {{ $w.summaryMaxPosts | quote }}
+                - name: SUMMARY_WINDOW_DAYS
+                  value: {{ $w.summaryWindowDays | quote }}
+                - name: SENTENCE_POSTS
+                  value: {{ $w.sentencePosts | quote }}
+                - name: SENTENCE_POST_CHARS
+                  value: {{ $w.sentencePostChars | quote }}
+                - name: RUN_BUDGET_SECONDS
+                  value: {{ $w.runBudgetSeconds | quote }}
+                - name: CLASSIFY_TIMEOUT_SECONDS
+                  value: {{ $w.classifyTimeoutSeconds | quote }}
+                - name: SENTENCE_TIMEOUT_SECONDS
+                  value: {{ $w.sentenceTimeoutSeconds | quote }}
+              # The worker only waits on the LLM and PostgreSQL: the CPU work
+              # is in the llm pod.
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                {{- include "socialsignal.containerSecurityContext" . | nindent 16 }}
+              volumeMounts:
+                {{- include "socialsignal.databaseVolumeMount" . | nindent 16 }}
+          volumes:
+            {{- include "socialsignal.databaseVolume" (dict "secret" .Values.credentials.analysis) | nindent 12 }}

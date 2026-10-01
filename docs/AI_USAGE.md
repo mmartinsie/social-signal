@@ -564,3 +564,56 @@ memory is trimmed so it does not duplicate them.
   - the model loaded in 39 s and uses 3.5 GiB;
   - `verify-boundary` 31/31, `make llm-smoke` 3/3;
   - 0 image pulls.
+
+### Step 8: the summary worker (session 3)
+
+- **Author decided, from options the agent proposed:**
+  - **Ties are `neutral`**, in every combination. The agent had proposed
+    `neutral` too, and argued against "negative wins".
+  - **The LLM sentence is kept, but made cheaper,** as the agent proposed:
+    only when the posts change, over the 20 most recent posts cut to 280
+    characters.
+  - **Every 5 minutes.** The author asked whether that was too often. The
+    agent answered that the schedule does not change how much the LLM
+    works, since each post is classified once, and showed the alternatives
+    in a table.
+  - **`updated_at` is when the summary was generated.** The agent had
+    proposed "last checked"; the author chose otherwise, and the agent
+    recorded the trade-off.
+  - **Steps 8a, 8b and 8c done in one go**, at the author's request, instead
+    of stopping after each.
+- **Author's question:** why not classify "in the middle of the ingestor's
+  run"? The agent answered both readings:
+  - classifying inside the ingestor breaks the boundary;
+  - a notification through PostgreSQL would keep it, but is not worth the
+    complexity now. It is an open item.
+- **Agent built:**
+  - the worker package: `llm.py`, `store.py`, `summary.py` and
+    `__main__.py`;
+  - 43 unit tests with fakes, including the time budget and every failure
+    path;
+  - the `worker` CronJob and its values; the chart refuses a budget that
+    cannot fit in the Job's deadline;
+  - the worker image in `make build`;
+  - `tools/llm_eval.py` changed to import the worker's client, so the
+    evaluation and the worker cannot drift apart.
+- **Verified before deploying:**
+  - the cron expression, server-side with `--dry-run=server`, which also
+    rejected a malformed one;
+  - the SQL, run as `analysis` in `postgres-0` and rolled back.
+- **Agent estimate wrong, found by measuring.** The agent told the author
+  that the current posts would fit in one run, at about 2.7 s per post.
+  The first run used up its budget after 34 posts. The agent then measured
+  from `classified_at`: the time grows with the post's length, from about
+  2.5 s for 40 characters to 5-8 s near 300. Real `#python` posts average
+  198 characters, while the earlier figures came from short test
+  sentences. The design already handled it: the next run finished the
+  rest. The documents now say "2.5 to 8 s per post".
+- **Failure path tested in the cluster:** the agent scaled the LLM to 0,
+  let a scheduled run find it down, checked that both summaries kept their
+  `updated_at`, and scaled it back.
+- **Side finding:** an ingestor Job from earlier in the session was marked
+  `Failed` (`DeadlineExceeded`) although its pod had succeeded. It
+  happened during the 9-minute import of the LLM image: the API server was
+  timing out under disk load. The agent reported it to the author without
+  changing anything.

@@ -10,6 +10,7 @@ namespaces:
 images:
   migrations: ""
   ingestor: ""
+  worker: ""
   llm: ""
 
 # How every component reaches PostgreSQL (the socialsignal-db release).
@@ -22,6 +23,7 @@ database:
 credentials:
   migrator: db-migrator
   ingestor: db-ingestor
+  analysis: db-analysis
   # Optional Bluesky app password from .env; only the hashtag ingestor
   # mounts it (A6).
   bluesky: bluesky-credentials
@@ -97,3 +99,25 @@ ingestor:
       - 192.168.0.0/16
       - 100.64.0.0/10
       - 169.254.0.0/16
+
+# The summary worker (A3, A8, D24): a CronJob in the analysis zone that
+# classifies new posts with the LLM and rewrites a summary only when its
+# posts change.
+worker:
+  # Every 5 minutes, 2 minutes after the ingestors (:00, :05...), so it finds
+  # the posts they just stored (they take about 10 s).
+  schedule: "2-59/5 * * * *"
+  # "Recent" (A2): the last 50 posts of the last 7 days.
+  summaryMaxPosts: 50
+  summaryWindowDays: 7
+  # The sentence reads the 20 most recent posts, each cut to 280 characters:
+  # on CPU its time grows with the prompt (D22).
+  sentencePosts: 20
+  sentencePostChars: 280
+  # No new LLM call starts after runBudgetSeconds. The budget plus the
+  # longest call (the sentence) must stay below runDeadlineSeconds, and that
+  # below the 300 s between runs, so a run never delays the next one.
+  runBudgetSeconds: 180
+  classifyTimeoutSeconds: 30
+  sentenceTimeoutSeconds: 90
+  runDeadlineSeconds: 285

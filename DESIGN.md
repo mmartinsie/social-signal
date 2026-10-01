@@ -31,6 +31,9 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
   label and one LLM-generated sentence, plus the item count and the last
   update time. If the LLM fails, only the label and counts are shown and the
   previous update time is kept.
+  - **A tie is `neutral`**, in any combination of labels.
+  - **The update time is when the summary was generated:** it changes only
+    when the summary's posts change.
 - **A4. Users:** no login; all analysts share one subscription list.
 - **A5. "Local network only":** enforced with default-deny NetworkPolicies in
   every namespace. The analysis zone can reach only PostgreSQL, the cluster
@@ -43,7 +46,8 @@ and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretati
 - **A7. Platform:** a local k3d cluster (k3s) stands in for an on-prem
   cluster; PostgreSQL is a single instance.
 - **A8. Freshness:** ingestion and summarisation run as periodic batch jobs
-  (CronJobs), not in real time.
+  (CronJobs), not in real time. The ingestors run every 5 minutes (handles)
+  and 20 (hashtags), and the worker every 5, two minutes after them.
 - **A9. Classification:** each post is classified once and the result is
   stored.
 - **A10. Priorities:** an end-to-end slice first. If time runs out, the cuts
@@ -81,8 +85,25 @@ llama.cpp's server with Gemma 4 E2B baked into the image.
   egress at all.
 - Only the worker can reach it, through the `llm` Service.
 - Its output is constrained by a JSON schema to one of three labels.
-- On 4 CPU cores it takes about 2.5 s per post, and it uses 3.5 GiB of
-  memory.
+- On 4 CPU cores a post takes from about 2.5 s (short) to 5-8 s (near
+  Bluesky's 300 characters), and it uses 3.5 GiB of memory.
+
+**Summary worker (A3, D24).** A CronJob in `analysis` runs every 5 minutes,
+two minutes after the ingestors. For each subscription, oldest summary
+first:
+1. It classifies with the LLM, once, the posts of the window (the last 50
+   of the last 7 days) that have no label yet, and stores each label.
+2. When every post of the window has a label, it counts them. The dominant
+   label is the most frequent one, and `neutral` on any tie.
+3. Only if the posts changed, it asks the LLM for one sentence about the 20
+   most recent posts, and stores the summary with `updated_at` = now.
+
+The cost of the LLM follows the new posts, not the schedule: a run with
+nothing new takes seconds and makes no LLM call. After 180 s a run starts
+no new LLM call, and the next run continues. If the sentence fails, the
+summary is stored with its label and counts only, and the sentence is
+retried. If the LLM is down, nothing is rewritten, and the analysts keep
+seeing the last summary with its date.
 
 **Data model (migration `0001`, D16).** All tables are owned by `migrator`;
 the application roles only get what their zone needs:
@@ -210,6 +231,20 @@ The flow works with exactly the grants in §3 and nothing more, because
 foreign-key checks and cascades run with the table owner's privileges.
 Granting the ingestor one extra privilege makes the run fail (tested).
 
+**Untrusted text reaches the LLM (D24).** Posts come from the internet, and
+the worker passes them to the LLM, so a post could try to steer it (prompt
+injection). What limits the damage:
+- The LLM has no tools and no network: it can only return text.
+- For each post, its output is constrained by a JSON schema to one of three
+  labels.
+- The summary sentence is free text, but it is only displayed, as text. The
+  prompt declares the posts as data, and puts the deterministic counts next
+  to them, so a steered sentence would contradict the numbers shown beside
+  it.
+
+At worst, one post could distort its own label or its subscription's
+sentence.
+
 ## 6. High availability
 
 **PostgreSQL: one pod, on purpose (D14).**
@@ -232,6 +267,11 @@ Granting the ingestor one extra privilege makes the run fail (tested).
 - Its image is on every node, so if its node goes down it is rescheduled
   elsewhere. Classification then pauses for about 40 s while the model
   loads.
+
+**Summary worker: a CronJob (D24).** A run on a failed node is simply
+replaced by the next one, on another node, 5 minutes later. Labels are
+stored as they are produced, so no work is lost. While the worker or the
+LLM is down, the API keeps serving the last summaries.
 
 *API replicas, probes, PDB and node drain: TBD (step 10).*
 
@@ -348,6 +388,15 @@ same tarballs would be pushed there instead. See
   hundred real posts, measure accuracy per class, and use that set to
   compare prompts and models (E2B against E4B), and to catch regressions
   when either changes.
+- **Event-driven summaries:** the ingestor could signal new posts through
+  PostgreSQL `NOTIFY`, and an always-running worker `LISTEN` for them. It
+  keeps the boundary, since zones only meet in `data`, and would cut a few
+  minutes of delay, at the cost of reconnection handling and a sweep for
+  missed notifications (D24).
+- **Show when the worker last ran:** `updated_at` is when a summary was
+  generated, so a quiet handle shows an old date even when everything
+  works. Recording each successful run would let the UI tell "no new
+  posts" from "the worker is not running" (D24).
 - **Build progress for the LLM image:** the build prints nothing for about
   6 minutes while Docker compresses the 3.35 GB layer, which looks like a
   hang. Show BuildKit's progress for that image.

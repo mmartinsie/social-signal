@@ -3,7 +3,10 @@ name = "socialsignal-worker"
 version = "0.1.0"
 description = "Classifies recent posts with the local LLM and stores per-subscription sentiment summaries."
 requires-python = ">=3.12"
-dependencies = ["socialsignal-common"]
+dependencies = [
+    "httpx>=0.28.1",
+    "socialsignal-common",
+]
 
 [tool.uv.sources]
 socialsignal-common = { workspace = true }

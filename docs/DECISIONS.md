@@ -85,6 +85,15 @@ decisions, **E** = development environment, **R** = repository layout.
 - **Trade-off:** the sentence costs one extra LLM call per subscription and
   run; three classes lose intensity and "mixed" nuance; ties between labels
   need a rule (decided in step 8).
+- **Completed in step 8 (D24), by the author:**
+  - **Ties are `neutral`:** whether the tie is negative with neutral,
+    positive with neutral, or positive with negative. No posts in the window
+    means no label.
+  - **`updated_at` is when the summary was generated.** It moves only when
+    the summary's posts change, or when its sentence is finally written. It
+    does not move on a run that finds nothing new.
+  - **The sentence costs one LLM call only when the posts change**, not on
+    every run.
 
 ### A4. Users and authentication
 
@@ -1375,6 +1384,162 @@ decisions, **E** = development environment, **R** = repository layout.
   - **Checks:** `verify-boundary` 31/31, and `make llm-smoke` 3/3 (6.6 s for
     the first request, then about 2.5 s).
 
+### D24. The summary worker (step 8)
+
+- **Decision:**
+  - **A CronJob `worker` in `analysis`**, as A8 planned, with the same
+    settings as the ingestors (D19): `Forbid`, `startingDeadlineSeconds`
+    120, `backoffLimit` 0, the shared hardening, and the `db-analysis`
+    Secret mounted as a file.
+    - **Schedule `2-59/5 * * * *`** (the author chose 5 minutes): it runs
+      at :02, :07, :12…, two minutes after the ingestors, which take about
+      10 s. Each run finds the posts they just stored.
+    - **The pod carries `component: worker`**, so the existing `worker`
+      NetworkPolicy lets it reach only PostgreSQL, the LLM and the DNS.
+  - **One run** (`services/worker`):
+    1. **Checks the LLM first.** If `/health` is not 200, for example while
+       the model loads after a start, it touches nothing and exits 1. The
+       model's name comes from `/v1/models` and is stored with every label.
+    2. **Takes the subscriptions** whose summary is oldest first, and
+       those without a summary before any other.
+    3. **Classifies each post of the window only once** (A2, A9): the last
+       50 posts of the last 7 days that have no label yet. Each label is
+       stored as soon as it arrives, so a run cut short keeps its work.
+    4. **Summarises only a fully classified window.** It counts the labels
+       and picks the dominant one: the maximum, and `neutral` on any tie
+       (A3). A summary of half the posts is never shown.
+    5. **Rewrites the summary only if its posts changed**, and only then
+       asks the LLM for the sentence. The posts changed if one was
+       classified after the summary was written, or if the counts moved
+       because a post left the window. `updated_at` is then the database's
+       `now()`.
+  - **The sentence:**
+    - the prompt holds the 20 most recent posts, each cut to 280
+      characters, on one line;
+    - it also holds the counts and the dominant label, so the sentence
+      cannot contradict the label shown next to it;
+    - at most 30 words, in English, temperature 0, `max_tokens` 100;
+    - the posts are declared as data, not instructions.
+  - **A time budget per run:**
+    - no new LLM call starts after 180 s, and the longest call is the
+      sentence, with a 90 s timeout, so the worst case is about 270 s;
+    - the Job's `activeDeadlineSeconds` (285 s) is only a safety net,
+      below the 300 s between runs;
+    - the chart refuses to render if the budget plus the sentence timeout
+      reach the deadline;
+    - whatever is left is picked up by the next run, 5 minutes later.
+  - **Failures:**
+
+    | What fails | What happens |
+    |---|---|
+    | The LLM is not ready at the start | Nothing is touched; exit 1 |
+    | The LLM stops answering, returns 503 or takes more than 30 s for a label | The run stops; the labels already stored are kept; exit 1 |
+    | An unusable label, or a database error, for one subscription | That subscription is skipped; the others go on; exit 1 |
+    | The sentence fails or times out | The summary is stored with its label and counts and no sentence (degraded mode, A3); the next run retries the sentence |
+    | The budget runs out before the sentence | The same: fresh counts now, the sentence next run |
+    | The subscription is deleted during the run | Nothing stored; not a failure |
+
+  - **The evaluation reuses the worker's client.** `tools/llm_eval.py` now
+    imports `socialsignal_worker.llm` and runs in the worker image, so it
+    measures exactly the prompts the worker sends.
+- **Alternatives:**
+  - **Classify inside the ingestor**, which the author asked about. It
+    would let the internet-facing zone reach the LLM, which the boundary
+    forbids and `verify-boundary` checks. It would also need more grants
+    for `ingestor`, and it would tie ingestion to the LLM: while the LLM is
+    down or slow, ingestion would stop or run past its deadline. A9 already
+    ruled it out.
+  - **The ingestor notifies the worker when it finishes:**
+    - by creating a Job through the Kubernetes API: that gives the
+      internet-facing zone rights over `analysis`, and `ingest` cannot
+      reach the Kubernetes API anyway;
+    - through PostgreSQL `NOTIFY`/`LISTEN`, crossing zones only through
+      `data`: it keeps the boundary, but needs an always-running worker,
+      reconnection handling and a periodic sweep for missed notifications,
+      to save a few minutes at most. It is an open item.
+  - **A Deployment with an internal loop.** Rejected in A8: it needs its
+    own guard against overlapping runs, and it holds resources between
+    runs.
+  - **Every 10 or 15 minutes.** Running less often saves no LLM work, since
+    each post is classified once; it only delays the summary. An idle run
+    costs a few seconds of a small pod.
+  - **Rewrite `updated_at` on every run**, meaning "checked as of". Rejected
+    by the author: `updated_at` is when the summary was generated.
+  - **Keep the previous sentence when a new one fails.** It would describe
+    other posts than the counts next to it.
+  - **A `mixed` label for ties.** It needs a schema change, and the counts
+    already show the split.
+- **Why:**
+  - Classification stays in the analysis zone.
+  - The cost of the LLM is bounded by new posts, not by the schedule.
+  - Nothing is lost when a run is cut short: labels are kept, and the
+    summary is only written from complete data.
+  - Every failure is visible as a failed Job, while the analysts keep
+    seeing the last summary with its date.
+- **Trade-off:**
+  - **Freshness:** at most about 7 minutes from a handle's ingestion to
+    its summary, about 25 for a hashtag.
+  - **`updated_at` does not tell "no new posts" from "the worker is not
+    running":** a quiet handle shows an old date even when everything
+    works. A failed Job shows the second case.
+  - **One change is not detected:** a post classified earlier for another
+    subscription that replaces a post with the same label in a full window
+    of 50. The counts are still right; only the sentence could describe a
+    slightly older set.
+  - **A post the LLM could never label** would fail its subscription on
+    every run. With the label constrained by a JSON schema, and posts of at
+    most 300 characters in an 8192-token context, no such case is known.
+  - **A timed-out request may keep the LLM's only slot busy** until the
+    server finishes it, so the next call can time out too. The run then
+    stops, and the next run continues.
+  - **After `make start`,** the first run can find the LLM still loading:
+    that Job fails, and the next one does the work.
+- **Verified:**
+  - **Before deploying:**
+    - 43 new unit tests, 96 in total, with fakes of the database and the
+      LLM;
+    - the cron expression, accepted by the API server with
+      `--dry-run=server` (a malformed one is rejected);
+    - the worker's SQL, run as `analysis` in `postgres-0` and rolled back:
+      a window of 50 posts for `#python` and 1 for `@bsky.app`, a second
+      label for the same post is a no-op, and the summary upsert inserts
+      and then updates;
+    - the image: 50 MB, uid 10001, no source code, imports and settings
+      checked with `--network none`.
+  - **`make start`:** only the three changed Python images were imported
+    (the lock file changed, so `migrations` and `ingestor` got new tags
+    too); the LLM image was unchanged.
+  - **First scheduled run (23:47 UTC), nothing classified yet:**
+    - `@bsky.app`: 1 post classified in 7 s, the sentence in 9 s, summary
+      `positive`;
+    - `#python`: the 180 s budget ran out after 33 of its 50 posts, which
+      were kept. The Job ended `Complete` in 3 min 20 s.
+  - **Second run (23:52):** `#python` classified the other 17 posts in
+    77 s and wrote the sentence in 49 s: 7 positive, 42 neutral, 1
+    negative, so `neutral`. `@bsky.app` was `unchanged`.
+  - **Time per post, measured from `classified_at`:** it grows with the
+    post's length, from about 2.5 s at 40 characters to 5-8 s near 300.
+    `#python` posts average 198 characters, so 5.35 s per post, about
+    twice the estimate, which came from short test sentences. A new
+    subscription with 50 long posts therefore takes two runs.
+  - **The stored model name** is `gemma-4-E2B-it-qat-q4_0`, from
+    `/v1/models`.
+  - **The sentences** (temperature 0):
+    - `@bsky.app`: "The subscription has a positive sentiment, focusing on
+      welcoming NHL fans to the season with hockey writer resources."
+    - `#python`: "The subscription shows a neutral sentiment, focusing on
+      Python topics like upgrades, tutorials, and data science
+      applications."
+  - **LLM down:** with the LLM scaled to 0, the 23:57 run logged "the LLM
+    … is not ready: nothing done" and ended `Failed`; both summaries kept
+    their `updated_at`. Scaled back, the LLM was ready in 32 s.
+  - **Recovery (00:02 run):** with no manual step, it classified the 3 new
+    `#python` posts from the 00:00 ingestion in 17 s and wrote a new
+    sentence in 56 s (8 positive, 41 neutral, 1 negative).
+  - **A run with nothing new** (the README's manual run): both
+    subscriptions `unchanged`, no LLM call, `updated_at` untouched.
+  - `make verify-boundary`: 31/31.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -1506,6 +1671,10 @@ External facts the decisions above depend on.
 | llama-server v0.5.0 enforces `response_format` in OpenAI's form (`json_schema: {name, schema}`) and `{"type": "json_object", "schema"}`, but ignores the documented `{"type": "json_schema", "schema"}` | Local test (D22) | 2026-10-01 |
 | BuildKit `COPY --chmod=0444 file /newdir/file` also gives mode 0444 to the directory it creates | Local test (D22): `ls -ld /models` | 2026-10-01 |
 | `k3d image import` imports a tarball into all nodes in parallel, unpacks it on every node, and deletes its own copy from the shared volume once done | Local test (D23): timestamps, `du` of each node's containerd, the `k3d-socialsignal-images` volume | 2026-10-01 |
+| The API server validates a CronJob `schedule` on creation: `2-59/5 * * * *` is accepted, `2-59/5x * * * *` is rejected with a parse error | `kubectl create cronjob --dry-run=server` (D24) | 2026-10-01 |
+| llama-server's `/v1/models` lists the model under its `--alias` (`gemma-4-E2B-it-qat-q4_0`) | The worker's stored `model` column (D24) | 2026-10-01 |
+| With Gemma 4 E2B on 4 CPU cores, a label takes about 2.5 s for a 40-character post and 5-8 s for one near 300 characters; real `#python` posts (198 characters on average) took 5.35 s each | `classified_at` of 33 posts in the cluster (D24) | 2026-10-01 |
+| One summary sentence over 20 real posts cut to 280 characters takes about 49 s on 4 CPU cores | Worker log in the cluster (D24) | 2026-10-01 |
 | k3s enforces NetworkPolicies with its embedded kube-router controller; policies can take a few hundred ms to apply to a new pod | k3s documentation; k3s-io/k3s issue #14711 | 2026-09-28 |
 | llama.cpp publishes official multi-arch server images | llama.cpp `docs/docker.md` | 2026-09-28 |
 | Bitnami retired its free image and chart catalogue | bitnami/charts #35164 | 2026-09-28 |

@@ -362,11 +362,15 @@ name = "socialsignal-worker"
 version = "0.1.0"
 source = { editable = "services/worker" }
 dependencies = [
+    { name = "httpx" },
     { name = "socialsignal-common" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "socialsignal-common", editable = "packages/common" }]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "socialsignal-common", editable = "packages/common" },
+]
 
 [[package]]
 name = "sqlalchemy"
