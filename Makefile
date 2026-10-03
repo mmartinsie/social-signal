@@ -101,8 +101,8 @@ start: ## Start the local cluster from the offline bundle and deploy the system
 	@$(SCRIPT_ENV) sh scripts/bluesky-secret.sh
 	@$(SCRIPT_ENV) sh scripts/deploy.sh
 
-stop: ## Stop the local cluster, keeping its state
-	k3d cluster stop $(CLUSTER)
+stop: ## Stop the local cluster, keeping its state (CronJobs paused until start)
+	@$(SCRIPT_ENV) sh scripts/cluster-down.sh
 
 clean: ## Delete the local cluster (the image bundle in dist/ is kept)
 	k3d cluster delete $(CLUSTER)

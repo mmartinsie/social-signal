@@ -1902,6 +1902,63 @@ recorded below.
     values. The Secret itself was correct: no `last-applied` annotation,
     created by `kubectl create`.
 
+### D28. `make stop` and `make start` survive new node IPs (step 13)
+
+- **Context:** after the project was closed, the author ran `make stop`,
+  then `make start` the next day. `make start` failed with `FATA ... Node
+  k3d-socialsignal-serverlb failed to get ready`, and nothing was deployed.
+  - Docker had given the nodes new IPs (the two agents swapped theirs), and
+    k3s crash-looped on each one until its Node object was updated (D11).
+  - Meanwhile `k3d cluster start` gave up waiting for its load balancer and
+    exited 1. With `set -e`, `cluster-up.sh` stopped right there, before
+    the step that waits for the nodes (D11).
+  - The cluster recovered by itself in about 2 minutes. The CronJobs that
+    ran while PostgreSQL was still recovering failed, and left pods in
+    `Error`.
+- **Decision:**
+  - **`make start` tolerates a slow start:** if `k3d cluster start` fails,
+    it says so, starts any node or load balancer still stopped with
+    `docker start`, and relies on the existing wait: every node `Ready`
+    three checks in a row, at most 10 minutes. Only then does it fail.
+  - **`make stop` pauses the CronJobs first** (`scripts/cluster-down.sh`),
+    then stops the cluster. On WSL2 it also prints how to give the cached
+    memory back to Windows.
+  - **`make start` resumes them last** (`scripts/deploy.sh`), after both
+    Helm releases are ready, so no run starts against a database that is
+    still recovering.
+  - **A failing template can no longer dump a Secret:** `db-secrets.sh`
+    reads a password with `{{with index .data "key"}}`, so a missing key
+    gives an empty value and the script's own error, not kubectl's
+    printout of the whole object (D27).
+- **Alternatives:**
+  - **Static node IPs.** k3d's `--subnet` gives a static IP to server nodes
+    only, not to agents (k3d v5.9.0 source, `pkg/client/cluster.go`). Any
+    other way means editing Docker networks behind k3d's back.
+  - **Let Helm resume the CronJobs** with `suspend: false` in the chart.
+    Tried and rejected: Helm 4 applies server-side, and refused the upgrade
+    because the field belonged to `kubectl-patch`. The chart now leaves
+    `suspend` out, and the scripts own it.
+  - **Recreate the cluster instead** (`make clean`, `make start`). Reliable,
+    but about 25 minutes, and the data is lost.
+- **Trade-off:**
+  - A restart after new IPs takes 3 minutes instead of 1.
+  - A real failure to start surfaces after the 10-minute wait, not at once.
+  - The k3d error line still appears in the output, followed by the
+    script's note.
+- **Verified:**
+  - `make stop`: the three CronJobs suspended, the cluster stopped in
+    26 s, and the memory in use went from 4.3 to 1.7 GB.
+  - `make start` after it: exit 0 in 53 s, the CronJobs resumed.
+  - **New IPs forced:** a placeholder container held the server's IP while
+    the cluster was stopped. The server moved from `.2` to `.3`, the
+    agents' k3s restarted 1 and 3 times, and `make start` still ended with
+    exit 0 in 2 minutes 44 s.
+  - **k3d failing forced:** with a fake `k3d` whose `cluster start` exits 1
+    without starting anything, the script started the four containers
+    itself and ended with exit 0 in 3 minutes.
+  - Then `make verify-boundary` 35/35, no pod in `Error`, and the next
+    ingestor and worker runs `Complete`.
+
 ---
 
 ## 3. Development environment (step 1)
@@ -2067,6 +2124,10 @@ External facts the decisions above depend on.
 | A wildcard `*` mirror counts as "listed": an image from `registry.k8s.io` is not pulled either | Local test (D9) | 2026-09-30 |
 | k3s imports the air-gap tarball asynchronously; pods can start (and pull) before it finishes | Local test: k3s logs vs. pod events | 2026-09-30 |
 | After `k3d cluster stop/start` an agent can get a new IP and crash-loop until the Node object is updated | Local test (D11) | 2026-09-30 |
+| Meanwhile `k3d cluster start` can give up waiting for its load balancer and exit 1, although the cluster then recovers by itself | The author's `make start` (D28) | 2026-10-02 |
+| k3d's `--subnet` (IPAM) gives a static IP to server nodes only, not to agents | k3d v5.9.0 source, `pkg/client/cluster.go` (D28) | 2026-10-02 |
+| Helm 4 applies server-side: an upgrade fails with a conflict on a field another manager changed (`kubectl-patch` on `.spec.suspend`) | Local test (D28) | 2026-10-03 |
+| WSL2's `autoMemoryReclaim` is an `[experimental]` setting whose default is `dropCache` | learn.microsoft.com/windows/wsl/wsl-config (D28) | 2026-10-02 |
 | CoreDNS pods carry `k8s-app=kube-dns` (53/UDP, 53/TCP); Traefik pods carry `app.kubernetes.io/name=traefik`; both run in `kube-system` | `kubectl get pods --show-labels` on the cluster | 2026-09-30 |
 | The Kubernetes API Service (`10.43.0.1:443`) points to `172.18.0.2:6443`, a private address | `kubectl get svc,endpointslices` | 2026-09-30 |
 | Helm 4: bare `--wait` means the `watcher` strategy; without the flag it defaults to `hookOnly` | `helm upgrade --help` (v4.3.0) | 2026-09-30 |

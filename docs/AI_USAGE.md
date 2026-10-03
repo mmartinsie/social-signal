@@ -766,3 +766,26 @@ memory is trimmed so it does not duplicate them.
     notes had never been in any commit, so they were neither in the zip nor
     on GitHub.
 
+
+### Step 13: `make stop` and `make start` after closing (session 4)
+
+- **How it started:** the WSL2 VM was using most of its memory, and the
+  agent proposed `make stop`. The next day the author's `make start` failed.
+  The agent diagnosed it from the node containers' logs and IPs: new IPs
+  after the restart, k3s restarting on those nodes, k3d giving up on its
+  load balancer, and `set -e` stopping the script before its existing wait.
+- **Author decided:** fix it rather than only document it; also check
+  whether the `go-template` in `db-secrets.sh` could print a Secret.
+- **Checked against sources, not assumed:** the agent read k3d's source
+  before proposing static IPs, and found that `--subnet` only fixes the
+  server's IP. It read the WSL documentation before advising on memory.
+- **Its first version failed in testing:** it let Helm resume the CronJobs
+  with `suspend: false` in the chart, and Helm 4's server-side apply
+  refused the upgrade. The agent explained the conflict and moved the
+  resume into `deploy.sh`.
+- **Tests that force the failure:** a placeholder container to force new
+  node IPs, and a fake `k3d` that fails, so the new branch actually ran.
+- **The `go-template` question:** a client-side `--dry-run` Secret with a
+  fake value showed that a failing template prints the whole object. The
+  script was not leaking, as `set -e` stopped it first, but now a missing
+  key gives an empty value and the script's own error.

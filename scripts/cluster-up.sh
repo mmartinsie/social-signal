@@ -62,7 +62,19 @@ done
 export K3D_IMAGE_LOADBALANCER="$K3D_PROXY_IMAGE" K3D_IMAGE_TOOLS="$K3D_TOOLS_IMAGE"
 if k3d cluster get "$CLUSTER" >/dev/null 2>&1; then
   echo "start cluster $CLUSTER"
-  k3d cluster start "$CLUSTER"
+  # After a stop, Docker may give a node a new IP. k3s then restarts on that
+  # node until its Node object catches up, and k3d may give up waiting for
+  # its load balancer meanwhile (D28). Step 4 waits for the nodes, so do not
+  # fail here: make sure every node and the load balancer are running.
+  if ! k3d cluster start "$CLUSTER"; then
+    echo "note  k3d stopped waiting; nodes whose IP changed recover in a few minutes"
+  fi
+  docker ps -a --filter "label=k3d.cluster=$CLUSTER" --format '{{.Names}} {{.Label "k3d.role"}} {{.State}}' |
+    awk '($2 == "server" || $2 == "agent" || $2 == "loadbalancer") && $3 != "running" { print $1 }' |
+    while read -r container; do
+      echo "start $container"
+      docker start "$container" >/dev/null
+    done
 else
   echo "create cluster $CLUSTER"
   # k3s imports the air-gap tarball from this directory every time it starts.

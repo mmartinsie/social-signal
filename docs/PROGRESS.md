@@ -1,10 +1,16 @@
 # Progress
 
-_Last updated: 2026-10-01 (step 12)._
+_Last updated: 2026-10-03 (step 13)._
 
 ## Current step
 
-**All twelve steps are done.** Step 12, the final documentation:
+**Step 13, after closing (D28):** `make stop` followed by `make start`
+failed when Docker gave the nodes new IPs. Now `make start` waits for the
+nodes instead of failing; `make stop` pauses the CronJobs and `make start`
+resumes them once everything is ready; `db-secrets.sh` can no longer dump a
+Secret if its template fails. Tested by forcing new IPs and a failing k3d.
+
+**Steps 0-12 were done by 2026-10-01.** Step 12, the final documentation:
 - `DESIGN.md` complete: an architecture diagram and the flow, a table of
   the key decisions, delivery to isolated sites, how AI agents were used,
   the time spent (about 6 hours) and the open items grouped by theme;
@@ -54,6 +60,7 @@ is deleted (`make clean`) or recreated from `~/social-signal`.
 | 10 | High availability and zero-downtime updates, with drain and update demos | Done (2026-10-01) |
 | 11 | `make build` and `make start` from a clean clone | Done (2026-10-01) |
 | 12 | Final documentation, API ingress checks, decisions reviewed, zip | Done (2026-10-01) |
+| 13 | `make stop` / `make start` survive new node IPs; CronJobs paused while stopped | Done (2026-10-03) |
 
 ## Follow-ups
 

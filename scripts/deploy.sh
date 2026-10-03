@@ -41,3 +41,15 @@ helm upgrade --install "$DB_RELEASE" "$DB_CHART" \
 helm upgrade --install "$APP_RELEASE" "$APP_CHART" \
   --kube-context "$KUBE_CONTEXT" --namespace "$APP_NAMESPACE" \
   "$@" --wait --timeout 10m
+
+# `make stop` suspends the CronJobs (D28): resume them now that the database
+# and the application are ready. The chart leaves `suspend` out on purpose:
+# Helm 4 applies server-side and would refuse to take the field back.
+for ns in ingest analysis; do
+  for cronjob in $(kubectl --context "$KUBE_CONTEXT" -n "$ns" get cronjob -o name); do
+    if [ "$(kubectl --context "$KUBE_CONTEXT" -n "$ns" get "$cronjob" -o jsonpath='{.spec.suspend}')" = true ]; then
+      kubectl --context "$KUBE_CONTEXT" -n "$ns" patch "$cronjob" --type=merge -p '{"spec":{"suspend":false}}' >/dev/null
+      echo "resume $ns/${cronjob#*/}"
+    fi
+  done
+done

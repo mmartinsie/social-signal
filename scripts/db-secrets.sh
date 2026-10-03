@@ -33,8 +33,10 @@ secret_exists() { # namespace name
   $kubectl get secret "$2" -n "$1" >/dev/null 2>&1
 }
 
-secret_value() { # namespace name key -> decoded value
-  $kubectl get secret "$2" -n "$1" -o go-template="{{index .data \"$3\" | base64decode}}"
+secret_value() { # namespace name key -> decoded value, empty if missing
+  # A failing template makes kubectl print the whole object, Secret data
+  # included (D27): `with` keeps a missing key from failing it.
+  $kubectl get secret "$2" -n "$1" -o go-template="{{with index .data \"$3\"}}{{base64decode .}}{{end}}"
 }
 
 new_password() {

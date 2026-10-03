@@ -296,10 +296,20 @@ run it is in its docstring. It is a smoke check, not a benchmark.
 ## Stop and clean up
 
 ```sh
-make stop       # stop the cluster, keeping its state; `make start` resumes it
+make stop       # pause the CronJobs and stop the cluster, keeping its state
 make clean      # delete the cluster; the image bundle in dist/ is kept
 make distclean  # delete the cluster and the image bundle
 ```
+
+`make start` after `make stop` resumes the cluster and the CronJobs, usually
+in about a minute. Docker may give the nodes new IPs on restart. k3s then
+restarts on those nodes for a minute or two, and k3d may print a `FATA`
+line about its load balancer. `make start` notes it, waits for the nodes
+(up to 10 minutes) and carries on (D28).
+
+On WSL2, Linux keeps the files it read cached after `make stop`, and Windows
+still counts that memory as the VM's. `make stop` prints the command that
+gives it back.
 
 `make clean` keeps `dist/` on purpose: on an isolated host the bundle cannot
 be downloaded again.
