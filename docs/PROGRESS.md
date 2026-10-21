@@ -6,9 +6,10 @@ _Last updated: 2026-10-21 (step 14)._
 
 **Step 14, preparing the public repository:** the requirements are now in
 [`REQUIREMENTS.md`](REQUIREMENTS.md), written in the project's own words,
-and the documents refer to "the requirements". Next: rewrite the git
-history so no earlier commit holds the original requirements document,
-then publish the result as a new public repository.
+and the documents refer to "the requirements". The git history was
+rewritten so that no commit holds the original requirements document or
+quotes it; the final tree did not change. Next: publish it as a new public
+repository.
 
 **Step 13, after closing (D28):** `make stop` followed by `make start`
 failed when Docker gave the nodes new IPs. Now `make start` waits for the

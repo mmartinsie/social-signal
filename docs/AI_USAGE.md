@@ -808,3 +808,13 @@ memory is trimmed so it does not duplicate them.
   about 60 lines in 9 files now say "the requirements" instead of quoting
   the original document. The replacements ran from a script that refused
   any text not found exactly once.
+- **The history, rewritten with `git filter-repo`:**
+  - the original document removed from every commit; in the old commits,
+    the role, the dates and the literal quotes replaced with the current
+    wording; local paths renamed;
+  - run on a throwaway clone, after a backup bundle of the old history;
+  - checked before touching the working repository: no commit holds the
+    document, its quotes or the removed words; the 22 commit messages are
+    the same except one; the final tree is identical, so no file changed;
+  - the old commits still use the generic word "brief", on purpose: the
+    requirements did arrive as a document.
