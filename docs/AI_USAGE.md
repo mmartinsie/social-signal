@@ -1,7 +1,7 @@
 # AI usage
 
-The brief encourages the use of AI agents and asks the author to be able to
-defend the result. This file is a running log of how AI was used, step by
+The requirements welcome AI agents and ask the author to be able to defend
+the result. This file is a running log of how AI was used, step by
 step. It feeds the "How AI agents were used" section of
 [`DESIGN.md`](../DESIGN.md).
 
@@ -54,11 +54,11 @@ memory is trimmed so it does not duplicate them.
 
 ## Log
 
-### Step 0: brief analysis and plan (session 1)
+### Step 0: requirements analysis and plan (session 1)
 
 - **Agent:** summarised the functional and non-functional requirements,
-  listed the ambiguities in the brief, reviewed the technical proposals in
-  `CLAUDE.md` and verified the external facts they depended on (Gemma 4
+  listed the ambiguities in the requirements, reviewed the technical
+  proposals in `CLAUDE.md` and verified the external facts they depended on (Gemma 4
   variants, Bluesky search authentication, NetworkPolicy enforcement in k3s,
   llama.cpp images, the Bitnami catalogue). The sources are in
   [`DECISIONS.md`](DECISIONS.md#5-verified-facts).
@@ -80,13 +80,13 @@ memory is trimmed so it does not duplicate them.
   proposed how to install the missing ones.
 - **Outcome:** the environment in [`DECISIONS.md`](DECISIONS.md#3-development-environment-step-1)
   (E1-E4): WSL2 on D:, Docker Engine inside WSL, and the pinned tool
-  versions. The repository moved from the Windows filesystem to `~/social-signal` in
-  WSL; the Windows copy is kept only as a backup.
+  versions. The repository moved from the Windows filesystem to
+  `~/social-signal` in WSL; the Windows copy is kept only as a backup.
 
 ### Step 2: repository skeleton (session 2)
 
 - **Handoff:** the author gave the agent a handoff prompt. The agent read
-  `CLAUDE.md`, `BRIEF.md` and its memory, and confirmed that the memory
+  `CLAUDE.md`, the requirements and its memory, and confirmed that the memory
   matched the handoff. The memory lacked two details, which it took from the
   handoff: DNS tunnelling as an open item, and the order in which features
   are cut.
@@ -98,7 +98,8 @@ memory is trimmed so it does not duplicate them.
   - this log.
 - **Author decided:**
   - the project name `socialsignal` (the agent had proposed `feedsense`);
-  - versioning `BRIEF.md` and `CLAUDE.md` so the use of AI stays traceable;
+  - versioning the requirements and `CLAUDE.md` so the use of AI stays
+    traceable;
   - placeholders that fail (the recipe exits with status 1);
   - `DECISIONS.md` organised around A1-A11, and an "Assumptions" section in
     `DESIGN.md`;
@@ -704,7 +705,7 @@ memory is trimmed so it does not duplicate them.
 - **Author decided:** "do it", after the agent warned that the test meant
   deleting the cluster and its data, and taking 15-25 minutes. Midway, the
   author asked whether to copy `.env` into the clone. The agent proposed
-  to test without it first, as a reviewer would, then copy it (with
+  to test without it first, as a new user would, then copy it (with
   `cp -p`, without reading it) to test the credentials path. The author's
   idea and the agent's order were both kept.
 - **Checked before starting:** free space where the WSL disk actually
@@ -789,3 +790,21 @@ memory is trimmed so it does not duplicate them.
   fake value showed that a failing template prints the whole object. The
   script was not leaking, as `set -e` stopped it first, but now a missing
   key gives an empty value and the script's own error.
+
+### Step 14: preparing the public repository (session 4)
+
+- **Author decided:** publish the project as a public repository, keep the
+  21-commit history (rewritten), keep the commit email, and describe the
+  origin of the requirements later, in the README.
+- **Agent checked first, before proposing anything:**
+  - every tracked file and every commit of the history, for the original
+    requirements document and the words to remove;
+  - the history for secrets: the only app-password-like strings were the
+    tests' fake `abcd-efgh-ijkl-mnop`;
+  - GitHub's documentation: after a force-push, old commits stay reachable
+    by SHA in cached views. So the clean history goes to a new repository,
+    not over the old private one.
+- **Done:** the requirements were rewritten as `docs/REQUIREMENTS.md`, and
+  about 60 lines in 9 files now say "the requirements" instead of quoting
+  the original document. The replacements ran from a script that refused
+  any text not found exactly once.

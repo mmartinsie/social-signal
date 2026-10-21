@@ -12,12 +12,12 @@ point" section of [`CLAUDE.md`](../CLAUDE.md).
 > updated with what was finally built. From D7 on, each decision was written
 > during its step and approved by the author with that step.
 
-Identifiers: **A** = interpretation of the brief, **D** = other design
+Identifiers: **A** = interpretation of the requirements, **D** = other design
 decisions, **E** = development environment, **R** = repository layout.
 
 ---
 
-## 1. Interpretation of the brief
+## 1. Interpretation of the requirements
 
 ### A1. Which "small local LLM", and how to serve it
 
@@ -39,7 +39,7 @@ decisions, **E** = development environment, **R** = repository layout.
   - "Gemma 4 A2B" is not a published variant. The family is E2B, E4B, 12B,
     26B A4B and 31B (verified, see [Verified facts](#5-verified-facts)). E2B
     is the smallest one and matches the "small" intent.
-  - llama.cpp runs on CPU on both amd64 and arm64 (the reviewer may be on an
+  - llama.cpp runs on CPU on both amd64 and arm64 (a user may be on an
     ARM Mac) and ships an official multi-arch image with an HTTP API.
   - JSON-schema-constrained output guarantees a parseable label instead of
     free text that has to be scraped.
@@ -48,7 +48,7 @@ decisions, **E** = development environment, **R** = repository layout.
   - Ollama pulls models at runtime by default and adds a layer we do not
     need; vLLM targets GPUs; in-process `transformers` would put a heavy
     runtime in the worker image.
-  - A non-LLM classifier would not meet the brief ("use a small, local LLM").
+  - A non-LLM classifier would not meet the requirements (a small, local LLM).
 - **Trade-off:** large image and slower `make build`; Q4 quantisation and a
   small model lose accuracy (sarcasm, irony, mixed posts); CPU inference is
   slow, which is mitigated by classifying each post only once (A9) in batch
@@ -115,9 +115,9 @@ decisions, **E** = development environment, **R** = repository layout.
   subscriptions with login (e.g. OIDC); basic authentication at the ingress.
 - **Decision:** **no users and no login**. One subscription list shared by
   all analysts.
-- **Why:** the brief does not require identity, the timebox is one evening,
+- **Why:** identity is not required, the timebox is one evening,
   and the system is reachable only from the analysts' local network. The
-  effort goes to what the brief emphasises: the security boundary, high
+  effort goes to what the requirements emphasise: the security boundary, high
   availability and updates.
 - **Trade-off:** anyone on the local network can change the subscriptions,
   and there is no per-user audit trail. Listed as an open item.
@@ -129,7 +129,8 @@ decisions, **E** = development environment, **R** = repository layout.
   enforced by the infrastructure.
 - **Options:** Kubernetes NetworkPolicies; separate clusters or node pools
   per zone; a firewall or egress proxy outside the cluster; a service mesh or
-  L7 policy engine; checks in application code (ruled out by the brief).
+  L7 policy engine; checks in application code (ruled out by the
+  requirements).
 - **Decision:** three namespaces (`ingest`, `data`, `analysis`) with
   **default-deny ingress and egress** in all of them, plus minimal allow rules
   per component:
@@ -214,10 +215,10 @@ decisions, **E** = development environment, **R** = repository layout.
     then a warning that says how to add credentials, not a failure.
   - The details are in D20.
 - **Why:**
-  - The reviewer can try hashtags without a Bluesky account while Bluesky
+  - Anyone can try hashtags without a Bluesky account while Bluesky
     allows it, and with a `.env` it always works.
   - The secret never reaches the analysis zone, nor the handle ingestor.
-  - A relies on the reviewer having an account.
+  - A relies on the user having an account.
   - B depends on a block that Bluesky toggles.
   - D is a continuous, high-volume stream that needs a long-running
     consumer.
@@ -298,8 +299,8 @@ decisions, **E** = development environment, **R** = repository layout.
   in this order: the LLM sentence → the node-drain demo → hashtags. The time
   spent is reported honestly in `DESIGN.md`.
 - **Why:** a working slice is worth more than several half-finished
-  features. The cut order drops the least important feature first. The
-  reviewer may run macOS.
+  features. The cut order drops the least important feature first. Users
+  may run macOS.
 - **Trade-off:** each cut removes, in turn, readability, visible evidence of
   high availability, and half of requirement 1. The full plan goes beyond one
   evening, and the time report says so.
@@ -307,7 +308,7 @@ decisions, **E** = development environment, **R** = repository layout.
   - The end-to-end slice worked from step 9 on, and the three features in
     the cut order were all delivered: the LLM sentence (D24), the
     node-drain demo (`make demo-drain`, D26) and hashtags (D20, D21).
-  - All four functional requirements of the brief are met. The open items
+  - All four functional requirements are met. The open items
     in `DESIGN.md` are improvements, not missing requirements.
   - The author's active time was about 6 hours, spread over two days with
     breaks.
@@ -321,7 +322,7 @@ decisions, **E** = development environment, **R** = repository layout.
 - **Decision:** work in **WSL2 (Ubuntu 24.04)** with the repository on the
   Linux filesystem (`~/social-signal`), and force LF line endings with
   `.gitattributes` (`* text=auto eol=lf`).
-- **Why:** the same Linux tooling the reviewer will use; no Windows path
+- **Why:** the same Linux tooling most users will have; no Windows path
   problems (spaces and accents broke `make`); no CRLF breaking scripts; the
   Linux filesystem is much faster than `/mnt/c` for Docker builds.
 - **Trade-off:** WSL-specific quirks, such as the distribution shutting down
@@ -375,7 +376,7 @@ changed.
 - **Alternatives:** one chart per zone; an umbrella chart with subcharts;
   Kustomize or raw manifests.
 - **Why:** one release gives one version of the whole system, atomic
-  upgrades and one values file, which is simpler for the reviewer.
+  upgrades and one values file, which is simpler for the user.
 - **Trade-off:** the zones cannot be upgraded independently. The chart
   creates resources in several namespaces, so installs and uninstalls need
   care.
@@ -464,8 +465,8 @@ changed.
     build; never `latest`.
   - The bundle is per architecture; use `ARCH=arm64` to build one for an ARM
     host.
-  - `dist/` is not in the zip (hundreds of MB now, GBs with the LLM), so the
-    reviewer generates it with `make build`.
+  - `dist/` is not in the repository (hundreds of MB now, GBs with the LLM),
+    so each user generates it with `make build`.
   - Images are pinned by tag rather than digest, and the tarballs are not
     signed (open item).
   - On a site that has its own registry, the same tarballs would be pushed
@@ -488,15 +489,15 @@ changed.
   Idempotent writes make retries and overlapping schedules harmless.
 - **Trade-off:** rate limits and polling latency.
 
-### D6. Reviewer prerequisites
+### D6. Prerequisites for users
 
 - **Decision:** `docker`, `k3d`, `kubectl`, `helm` and `make`, plus `curl`
   and `shasum`, which are preinstalled on macOS and most Linux distributions.
   `uv` is only needed for local development: Python dependencies are
   installed inside the Docker builds.
 - **Alternatives:** require a local Python and uv toolchain.
-- **Why:** fewer tools for the reviewer to install; builds match the
-  reviewer's CPU architecture.
+- **Why:** fewer tools to install; builds match the user's CPU
+  architecture.
 - **Trade-off:** slower builds, which Docker layer caching mitigates.
 
 ### D7. Platform layer outside the Helm release (step 3b)
@@ -528,7 +529,7 @@ changed.
     `localhost:8080`, and it would then talk to Traefik and produce confusing
     errors. The author found this by running `kubectl` before the cluster
     existed.
-- **Why:** the reviewer's machine may have other clusters and contexts, and
+- **Why:** the user's machine may have other clusters and contexts, and
   running the demo must not change them.
 - **Trade-off:** to use kubectl by hand you pass `--context` or switch
   explicitly. k3d still sets the context when the kubeconfig has no current
@@ -675,7 +676,7 @@ changed.
      database chart would have to create Secrets in other zones.
   2. **Generated by `make start` (chosen).**
   3. A user-provided `.env`. Nobody needs to know these passwords, the
-     reviewer would have to create the file, and it could be committed by
+     user would have to create the file, and it could be committed by
      mistake. It remains the plan for the user's own Bluesky credentials
      (A6, step 6).
   4. An external secret manager (Vault, External Secrets Operator, Sealed
@@ -710,7 +711,7 @@ changed.
   - `pg_isready` startup, readiness and liveness probes.
   - A `postgres` ClusterIP Service for clients, plus a headless Service for
     the StatefulSet.
-- **Why one pod:** the timebox, and the brief's focus on HA *for the
+- **Why one pod:** the timebox, and the requirements' focus on HA *for the
   analysts*: the API is replicated, the database is not. The consequence
   is stated plainly: **today any restart or upgrade of PostgreSQL is an
   outage**. Deleting the pod measured about 6 s until it was Ready again,
@@ -800,7 +801,7 @@ changed.
   - Old tags accumulate in the nodes' containerd until kubelet's image GC
     removes them.
   - Building for another architecture (`ARCH=arm64` on amd64) needs QEMU
-    emulation, which this WSL host lacks (`systemd-binfmt` fails). Reviewers
+    emulation, which this WSL host lacks (`systemd-binfmt` fails). Users
     build natively.
   - Without the attestations there is no build provenance; signing the
     bundle is an open item.
@@ -1646,7 +1647,7 @@ worked stay untouched.
     so the page states what "recent" means.
 - **Alternatives:**
   - **A single-page app with JavaScript.** More code, a build step, and
-    nothing the brief needs.
+    nothing the requirements need.
   - **Readiness that checks the database.** With PostgreSQL down, every
     replica would turn unready at once: Traefik would answer a bare 503,
     and Kubernetes would gain nothing, since no replica could serve anyway.
@@ -1662,7 +1663,7 @@ worked stay untouched.
     no login.
 - **Why:**
   - Server-rendered HTML with autoescaping is the smallest UI that meets
-    the brief, and it works offline.
+    the requirements, and it works offline.
   - The sentence is written from posts off the internet, and the template
     escapes it.
   - The API only reads what the worker precomputed, so it keeps answering
@@ -1794,7 +1795,7 @@ recorded below.
   - **Drain any node, PostgreSQL's included.** That is an outage of about
     6 s by design until CloudNativePG (D14), so the demo avoids it and says
     so.
-- **Why:** the brief asks for high availability for the analysts. The
+- **Why:** the requirements ask for high availability for the analysts. The
   measurements showed it depends on the whole path, not only on our
   replicas.
 - **Trade-off:**
@@ -1829,7 +1830,7 @@ recorded below.
 
 ### D27. `make build` and `make start` from a clean clone (step 11)
 
-- **Decision:** test exactly what a reviewer gets.
+- **Decision:** test exactly what a new user gets.
   - **A `git clone` into a new directory** (`~/social-signal-clean`), with no
     `dist/` and no `.env`.
   - **The previous cluster deleted first** (`make clean`), since the
@@ -1844,7 +1845,7 @@ recorded below.
       to test the credentials path and a second start.
 - **Alternatives:**
   - **Reuse `dist/` or the model from the working copy.** Faster, but it
-    would not test the downloads a reviewer runs.
+    would not test the downloads a new user runs.
   - **Clear Docker's build cache too.** Closer to a new machine, but it
     would throw away about 12 GB of cache used for development. The
     timings say the cache was warm.
@@ -1975,7 +1976,7 @@ recorded below.
     risk.
 - **Trade-off:** 10 GB caps the cluster plus the LLM, so resource requests
   must stay modest. D: is an HDD, which makes image imports into the k3d
-  nodes slow (minutes per node for the k3s air-gap tarball); a reviewer on
+  nodes slow (minutes per node for the k3s air-gap tarball); a user on
   an SSD will see much shorter start times.
 
 ### E2. Docker Engine inside WSL instead of Docker Desktop
@@ -2005,7 +2006,7 @@ recorded below.
 
 - **Decision:** develop with Helm 4.3.0 but keep the chart at
   `apiVersion: v2`, the format Helm 3 also reads.
-- **Why:** the reviewer may still have Helm 3.
+- **Why:** users may still have Helm 3.
 - **Trade-off:** we cannot use Helm 4-only features. Compatibility with
   Helm 3 is intended, not tested.
 
@@ -2055,14 +2056,15 @@ recorded below.
 
 ### R4. AI traceability is versioned
 
-- **Decision:** `BRIEF.md`, `CLAUDE.md` (the AI agent's instructions) and
+- **Decision:** [`REQUIREMENTS.md`](REQUIREMENTS.md), `CLAUDE.md` (the AI
+  agent's instructions) and
   [`AI_USAGE.md`](AI_USAGE.md) (a per-step log of AI use) are part of the
   repository.
 - **Alternatives:** describe AI use only in a short section of `DESIGN.md`.
-- **Why:** the brief encourages AI agents and asks the author to be able to
-  defend the result; keeping the prompts, the rules and the log in the repo
+- **Why:** the requirements welcome AI agents and ask the author to be able
+  to defend the result; keeping the prompts, the rules and the log in the repo
   makes the process auditable.
-- **Trade-off:** it exposes internal working notes to the reviewer.
+- **Trade-off:** it makes internal working notes public.
 
 ---
 

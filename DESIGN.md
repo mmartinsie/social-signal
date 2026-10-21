@@ -18,8 +18,9 @@ local LLM. The system is split into three network zones:
 
 ## 2. Assumptions
 
-How the ambiguous parts of the brief were interpreted. The options considered
-and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretation-of-the-brief).
+How the ambiguous parts of the [requirements](docs/REQUIREMENTS.md) were
+interpreted. The options considered
+and the trade-offs are in [`docs/DECISIONS.md`](docs/DECISIONS.md#1-interpretation-of-the-requirements).
 
 - **A1. Model:** "Gemma 4 A2B" is not a published variant. We use Gemma 4
   E2B, the smallest one: Google's official GGUF, quantised to Q4_0 with
@@ -181,7 +182,7 @@ The full record, with alternatives and trade-offs, is in
 | Area | Decision | Why | Ref. |
 |---|---|---|---|
 | Model | Gemma 4 E2B (Google's QAT Q4_0 GGUF) on llama.cpp's server, weights inside the image, labels constrained by a JSON schema | The smallest real variant ("A2B" does not exist); runs on CPU, amd64 and arm64; nothing downloaded at runtime; always a valid label | A1, D22 |
-| Security boundary | Three namespaces with default-deny, plus one allow rule per component; proved by `make verify-boundary` (35 checks, and a mutation test) | Enforced by the infrastructure, as the brief requires, and testable | A5, D12 |
+| Security boundary | Three namespaces with default-deny, plus one allow rule per component; proved by `make verify-boundary` (35 checks, and a mutation test) | Enforced by the infrastructure, as the requirements demand, and testable | A5, D12 |
 | Data | PostgreSQL as the only bridge between zones; one role per zone; the ingestor can only insert | Least privilege in the network and in the database | D1, D17 |
 | Ingestion | Two CronJobs (handles every 5 minutes, hashtags every 20), idempotent by post URI; optional Bluesky login | Polling fits the API; the secret lives only in `ingest` | A6, A8, D18-D21 |
 | Classification | Each post classified once, in the analysis zone, by a worker CronJob with a time budget | The LLM on CPU is the bottleneck | A9, D24 |
@@ -496,7 +497,7 @@ there instead. See
 
 ## 9. How AI agents were used
 
-The brief encourages AI agents. All the code, tests and documents were
+The requirements welcome AI agents. All the code, tests and documents were
 written with **Claude Code** (Claude Opus 5.5), in three sessions; the
 step-by-step log is in [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
 
@@ -530,13 +531,13 @@ step-by-step log is in [`docs/AI_USAGE.md`](docs/AI_USAGE.md).
 
 About **6 hours** of the author's active time (the author's own figure),
 spread over two days, 30 September and 1 October 2026, with breaks; all
-twelve steps. The brief expects one evening: the plan deliberately went
+twelve steps. The requirements expected one evening: the plan deliberately went
 further, with a fixed order of cuts in case time ran out (A10), and in the
 end nothing was cut.
 
 ## 11. Open items
 
-Improvements, none of them a missing requirement of the brief (A10).
+Improvements, none of them a missing requirement (A10).
 Grouped by theme, the most important first.
 
 ### High availability and operations

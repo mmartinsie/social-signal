@@ -1,8 +1,14 @@
 # Progress
 
-_Last updated: 2026-10-03 (step 13)._
+_Last updated: 2026-10-21 (step 14)._
 
 ## Current step
+
+**Step 14, preparing the public repository:** the requirements are now in
+[`REQUIREMENTS.md`](REQUIREMENTS.md), written in the project's own words,
+and the documents refer to "the requirements". Next: rewrite the git
+history so no earlier commit holds the original requirements document,
+then publish the result as a new public repository.
 
 **Step 13, after closing (D28):** `make stop` followed by `make start`
 failed when Docker gave the nodes new IPs. Now `make start` waits for the
@@ -20,8 +26,8 @@ Secret if its template fails. Tested by forcing new IPs and a failing k3d.
   and D3 were updated;
 - the README starts with a short summary, and its figures were refreshed.
 
-**The project is complete.** The submission zip (`socialsignal.zip`) is made
-from a fresh clone of the final commit, so it holds the repository with its
+**The project is complete.** The zip of the repository (`socialsignal.zip`)
+is made from a fresh clone of the final commit, so it holds the repository with its
 git history and nothing git-ignored (no `.env`, no personal notes, no
 `dist/`):
 1. `git clone --no-local` of the final commit;
@@ -40,7 +46,7 @@ is deleted (`make clean`) or recreated from `~/social-signal`.
 
 | # | Step | Status |
 |---|---|---|
-| 0 | Read the brief; requirements, ambiguities and plan | Done (2026-09-30) |
+| 0 | Read the requirements; summary, ambiguities and plan | Done (2026-09-30) |
 | 1 | Prerequisites | Done (2026-09-30) |
 | 2 | Repository skeleton | Done (2026-09-30) |
 | 3a | Offline image bundle (`make build` downloads all third-party images) | Done (2026-09-30) |
@@ -61,16 +67,17 @@ is deleted (`make clean`) or recreated from `~/social-signal`.
 | 11 | `make build` and `make start` from a clean clone | Done (2026-10-01) |
 | 12 | Final documentation, API ingress checks, decisions reviewed, zip | Done (2026-10-01) |
 | 13 | `make stop` / `make start` survive new node IPs; CronJobs paused while stopped | Done (2026-10-03) |
+| 14 | Public repository: requirements in our own words, history rewritten | In progress |
 
 ## Follow-ups
 
-- After the project: delete `~/social-signal-clean` only together with the
-  cluster (`make clean`), or after recreating it from `~/social-signal`.
+- Delete `~/social-signal-clean` only together with the cluster
+  (`make clean`), or after recreating it from `~/social-signal`.
 
 ## How to resume
 
-- Work inside WSL2 (Ubuntu 24.04); the repository is at `~/social-signal`. Docker
-  Engine runs inside WSL, not Docker Desktop.
+- Work inside WSL2 (Ubuntu 24.04); the repository is at `~/social-signal`.
+  Docker Engine runs inside WSL, not Docker Desktop.
 - WSL shuts the distribution down when it is idle (about 15 s with no WSL
   processes), which stops Docker and the k3d cluster. `make start` brings the
   cluster back (about 2 minutes). To avoid it, set `instanceIdleTimeout=-1`

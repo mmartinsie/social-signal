@@ -18,7 +18,7 @@ dist/
 # they are never committed.
 *.gguf
 
-# Packaged artefacts (submission zip, packaged Helm charts)
+# Packaged artefacts (the repository zip, packaged Helm charts)
 *.zip
 *.tgz
 
@@ -29,6 +29,6 @@ dist/
 # Claude Code per-user settings (CLAUDE.md itself is versioned on purpose)
 .claude/settings.local.json
 
-# The author's personal study notes; not part of the submission
+# The author's personal study notes; not part of the repository
 readme_personal.md
 readme_decisiond_personal.md

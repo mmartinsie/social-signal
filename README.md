@@ -332,9 +332,8 @@ be downloaded again.
 ├── docker/                  # the Dockerfile shared by every Python service
 ├── deploy/                  # k3d cluster config, platform manifests, Helm charts
 ├── scripts/                 # helper scripts called by the Makefile
-├── docs/                    # decisions, progress, AI usage log
+├── docs/                    # requirements, decisions, progress, AI usage log
 ├── DESIGN.md                # design document
-├── BRIEF.md                 # the assignment
 └── CLAUDE.md                # instructions for the AI coding agent
 ```
 
@@ -363,5 +362,5 @@ image bundle, and `dist/models/`, the LLM weights.
   step.
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): the steps, their state and how to
   resume work.
-- [`BRIEF.md`](BRIEF.md): the assignment. [`CLAUDE.md`](CLAUDE.md): the
-  working rules given to the AI agent.
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md): what the system had to
+  do. [`CLAUDE.md`](CLAUDE.md): the working rules given to the AI agent.
