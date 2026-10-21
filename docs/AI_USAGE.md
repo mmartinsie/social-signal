@@ -818,3 +818,26 @@ memory is trimmed so it does not duplicate them.
     the same except one; the final tree is identical, so no file changed;
   - the old commits still use the generic word "brief", on purpose: the
     requirements did arrive as a document.
+- **GitHub refused the first push:** the author's account keeps its email
+  private and blocks pushes that would publish it. The agent laid out two
+  options, the author chose GitHub's no-reply address, and the agent
+  rewrote the author and committer of every commit, again on a throwaway
+  clone, with the same checks. Only this repository uses that address for
+  new commits.
+- **Published** as a new repository, after checking that the old private
+  one's history could not reach it.
+
+### Step 15: the README tells how the project was built (session 4)
+
+- **Author decided:** the repository's purpose is to show how he works
+  with AI; the README says so first, then the project's basics; the origin
+  is "an old technical exercise"; the detailed instructions move to
+  `docs/GETTING_STARTED.md`.
+- **Agent:** drafted the README from the existing records (`CLAUDE.md`,
+  `DECISIONS.md`, `AI_USAGE.md`, `DESIGN.md`), then checked every claim
+  against them. Three were not exact and were fixed before the author saw
+  them: a guess about the author's first language, a script "removed"
+  that was in fact hardened, and a history "rewritten once" that was
+  rewritten twice.
+- **The instructions were moved by a script,** copied line for line, so
+  nothing was lost or retyped.

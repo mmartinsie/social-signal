@@ -1,14 +1,19 @@
 # Progress
 
-_Last updated: 2026-10-21 (step 14)._
+_Last updated: 2026-10-21 (step 15)._
 
 ## Current step
 
-**Step 14, preparing the public repository:** the requirements are now in
-[`REQUIREMENTS.md`](REQUIREMENTS.md), written in the project's own words,
-and the documents refer to "the requirements". The git history was
-rewritten so that no commit holds the original requirements document or
-quotes it; the final tree did not change. Next: publish it as a new public
+**Step 15, the README tells how the project was built with AI:** it now
+opens with the method (the rules, who decides what, verification, the
+agent's mistakes) and a reading guide, then the project's basics. The
+detailed instructions moved, unchanged, to
+[`GETTING_STARTED.md`](GETTING_STARTED.md).
+
+**Step 14, the public repository:** the requirements are in
+[`REQUIREMENTS.md`](REQUIREMENTS.md), in the project's own words; the
+history was rewritten so no commit holds the original document, and the
+commits use GitHub's no-reply address. Published as a new public
 repository.
 
 **Step 13, after closing (D28):** `make stop` followed by `make start`
@@ -68,7 +73,8 @@ is deleted (`make clean`) or recreated from `~/social-signal`.
 | 11 | `make build` and `make start` from a clean clone | Done (2026-10-01) |
 | 12 | Final documentation, API ingress checks, decisions reviewed, zip | Done (2026-10-01) |
 | 13 | `make stop` / `make start` survive new node IPs; CronJobs paused while stopped | Done (2026-10-03) |
-| 14 | Public repository: requirements in our own words, history rewritten | In progress |
+| 14 | Public repository: requirements in our own words, history rewritten | Done (2026-10-21) |
+| 15 | README about working with AI; instructions moved to `GETTING_STARTED.md` | Done (2026-10-21) |
 
 ## Follow-ups
 
